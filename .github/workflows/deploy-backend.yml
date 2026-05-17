@@ -15,10 +15,20 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            set -e
+            
+            echo "=== Pulling latest code ==="
             cd /home/apps/BigWhale/Server/BigWhale_Server
-            git pull origin main
-            cd /home/apps
-            docker compose build BigWhale_Server
-            docker compose up -d BigWhale_Server
-            docker image prune -f
-            echo "Backend deployed!"
+            git fetch origin
+            git reset --hard origin/main
+            
+            echo "=== Building and restarting container ==="
+            cd /home/apps/BigWhale
+            docker compose build --no-cache bigwhale-server
+            docker compose up -d bigwhale-server
+            
+            echo "=== Cleaning up old images ==="
+            docker image prune -af
+            docker builder prune -f
+            
+            echo "=== Backend deployed successfully at $(date) ==="
