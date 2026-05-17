@@ -15,10 +15,10 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /home/apps/BRC_Server
+            cd /home/apps/BigWhale/Server/BigWhale_Server
             git pull origin main
             cd /home/apps
-            docker compose build backend
-            docker compose up -d backend
+            docker compose build BigWhale_Server
+            docker compose up -d BigWhale_Server
             docker image prune -f
             echo "Backend deployed!"

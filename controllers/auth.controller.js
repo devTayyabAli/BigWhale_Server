@@ -1025,88 +1025,49 @@ try {
   }
 
   /**
-   * @description Generate Twitter OAuth 2.0 PKCE authorization URL
-   * GET /auth/twitter-auth-url?userId=xxx
+   * @description Verify WhatsApp channel join — user self-attests they joined
+   * POST /auth/verify-whatsapp  { userId }
+   *
+   * WhatsApp does not provide a public API to verify channel membership,
+   * so we use a self-attestation model: the user clicks "I've Joined" and
+   * we mark them as verified. This is the same pattern used by many platforms.
    */
-  static async getTwitterAuthUrl(req, res) {
+  static async verifyWhatsApp(req, res) {
     let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
     try {
-      const { userId } = req.query;
-      if (!userId) { response.message = "userId is required"; response.status = 400; return; }
+      const { userId } = req.body;
+      if (!userId) {
+        response.message = "userId is required";
+        response.status = 400;
+        return;
+      }
 
-      const { generateTwitterAuthUrl } = require("../services/socialVerification");
+      const user = await User.findById(userId);
+      if (!user) {
+        response.message = "User not found";
+        response.status = 404;
+        return;
+      }
 
-      // PKCE code verifier + state (embeds userId + codeVerifier for callback)
-      const codeVerifier = crypto.randomBytes(32).toString("base64url");
-      const state        = Buffer.from(JSON.stringify({ userId, codeVerifier })).toString("base64url");
-      const { authUrl }  = generateTwitterAuthUrl(state, codeVerifier);
+      // Mark WhatsApp as joined
+      await User.findByIdAndUpdate(userId, {
+        $set: {
+          "socialConfirmed.whatsappJoined":     true,
+          "socialConfirmed.whatsappVerifiedAt": new Date(),
+        },
+      });
 
       response.success = true;
       response.status  = 200;
-      response.message = "Twitter auth URL generated";
-      response.data    = { authUrl };
+      response.message = "WhatsApp channel membership confirmed!";
+      response.data    = { whatsappJoined: true };
     } catch (err) {
-      console.error("getTwitterAuthUrlError:", err);
+      console.error("verifyWhatsAppError:", err);
       response.message = err.message || "An internal server error occurred";
       response.status  = 500;
       response.success = false;
     } finally {
       return res.status(response.status).json(response);
-    }
-  }
-
-  /**
-   * @description Twitter OAuth 2.0 callback — exchange code, verify follow, save to DB
-   * GET /auth/twitter-callback?code=xxx&state=xxx
-   * Redirects back to frontend /withdrawal with query params
-   */
-  static async twitterCallback(req, res) {
-    const frontendBase = process.env.FRONTEND_BASE_URL;
-    try {
-      const { code, state, error } = req.query;
-      if (error || !code || !state) {
-        return res.redirect(`${frontendBase}/withdrawal?twitter_status=cancelled`);
-      }
-
-      let userId, codeVerifier;
-      try {
-        const decoded = JSON.parse(Buffer.from(state, "base64url").toString());
-        userId       = decoded.userId;
-        codeVerifier = decoded.codeVerifier;
-      } catch {
-        return res.redirect(`${frontendBase}/withdrawal?twitter_status=error&msg=invalid_state`);
-      }
-
-      const { exchangeTwitterCode, getTwitterUser, checkTwitterFollow } = require("../services/socialVerification");
-
-      const tokenResult = await exchangeTwitterCode(code, codeVerifier);
-      if (tokenResult.error) {
-        return res.redirect(`${frontendBase}/withdrawal?twitter_status=error&msg=token_exchange_failed`);
-      }
-
-      const twitterUser = await getTwitterUser(tokenResult.accessToken);
-      if (twitterUser.error) {
-        return res.redirect(`${frontendBase}/withdrawal?twitter_status=error&msg=user_fetch_failed`);
-      }
-
-      const followCheck = await checkTwitterFollow(twitterUser.id);
-      if (!followCheck.verified) {
-        const msg = encodeURIComponent(followCheck.reason);
-        return res.redirect(`${frontendBase}/withdrawal?twitter_status=not_following&msg=${msg}`);
-      }
-
-      await User.findByIdAndUpdate(userId, {
-        $set: {
-          "socialConfirmed.twitterFollowed":   true,
-          "socialConfirmed.twitterUsername":   twitterUser.username,
-          "socialConfirmed.twitterVerifiedAt": new Date(),
-        },
-      });
-
-      return res.redirect(`${frontendBase}/withdrawal?twitter_status=verified`);
-    } catch (err) {
-      console.error("twitterCallbackError:", err);
-      return res.redirect(`${frontendBase}/withdrawal?twitter_status=error&msg=server_error`);
     }
   }
 
@@ -1131,10 +1092,9 @@ try {
         telegramJoined:     sc.telegramJoined     || false,
         telegramUsername:   sc.telegramUsername   || null,
         telegramVerifiedAt: sc.telegramVerifiedAt || null,
-        twitterFollowed:    sc.twitterFollowed    || false,
-        twitterUsername:    sc.twitterUsername    || null,
-        twitterVerifiedAt:  sc.twitterVerifiedAt  || null,
-        bothConfirmed: (sc.telegramJoined === true) && (sc.twitterFollowed === true),
+        whatsappJoined:     sc.whatsappJoined     || false,
+        whatsappVerifiedAt: sc.whatsappVerifiedAt || null,
+        bothConfirmed: (sc.telegramJoined === true) && (sc.whatsappJoined === true),
       };
     } catch (err) {
       console.error("getSocialStatusError:", err);

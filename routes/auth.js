@@ -40,18 +40,14 @@ router.post("/verify-2fa-otp", AuthController.verifyTwoFaOtp);
 router.post("/send-2fa-otp", AuthController.sendTwoFa);
 router.post('/missing-reward', AuthController.getMissingIncomeReward);
 
-// ── BIGWHALE Social Verification Routes (OAuth — no username input) ──
+// ── BIGWHALE Social Verification Routes ─────────────────────────────
 // Telegram Login Widget callback
 // POST /auth/verify-telegram  { userId, telegramData: { id, hash, auth_date, ... } }
 router.post('/verify-telegram', AuthController.verifyTelegram);
 
-// Twitter OAuth 2.0 PKCE — Step 1: get auth URL
-// GET  /auth/twitter-auth-url?userId=xxx
-router.get('/twitter-auth-url', AuthController.getTwitterAuthUrl);
-
-// Twitter OAuth 2.0 PKCE — Step 2: callback after user approves
-// GET  /auth/twitter-callback?code=xxx&state=xxx
-router.get('/twitter-callback', AuthController.twitterCallback);
+// WhatsApp Channel self-attestation
+// POST /auth/verify-whatsapp  { userId }
+router.post('/verify-whatsapp', AuthController.verifyWhatsApp);
 
 // GET  /auth/social-status/:userId
 router.get('/social-status/:userId', AuthController.getSocialStatus);

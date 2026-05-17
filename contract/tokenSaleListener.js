@@ -34,18 +34,18 @@ const listenTokenSales = () => {
           timestamp: block.timestamp,
         };
 
-        console.log("✅ Parsed KGCSold Event:", saleData);
+        console.log("✅ Parsed BWSold Event:", saleData);
 
         await syncTokenSaleFromChain(saleData, receipt);
       } catch (err) {
-        console.error("❌ Error handling KGCSold event:", err);
+        console.error("❌ Error handling BWSold event:", err);
       }
     })
     .on("error", (err) => {
       console.error("❌ Subscription error:", err);
     });
 
-  console.log("👂 Listening for KGCSold events on contract:", conractInfo.register.address);
+  console.log("👂 Listening for BWSold events on contract:", conractInfo.register.address);
 };
 
 module.exports = { listenTokenSales };

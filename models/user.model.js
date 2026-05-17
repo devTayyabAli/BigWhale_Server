@@ -176,16 +176,12 @@ const userSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
-      // Twitter / X
-      twitterFollowed: {
+      // WhatsApp Channel
+      whatsappJoined: {
         type: Boolean,
         default: false,
       },
-      twitterUsername: {
-        type: String,
-        default: null,
-      },
-      twitterVerifiedAt: {
+      whatsappVerifiedAt: {
         type: Date,
         default: null,
       },
