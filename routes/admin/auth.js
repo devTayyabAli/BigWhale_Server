@@ -30,6 +30,9 @@ router.get("/today-stake-reward", adminMiddleware, UserController.getTodayStakeR
 router.get("/today-sale", adminMiddleware, UserController.getTodaySale);
 router.get("/today-users", adminMiddleware, UserController.getTodayUsers);
 router.get("/today-banned-users", adminMiddleware, UserController.getTodayBannedUsers);
+router.get("/cash-inflow", adminMiddleware, UserController.getCashInflow);
+router.get("/cash-outflow", adminMiddleware, UserController.getCashOutflow);
+router.get("/global-turnover", adminMiddleware, UserController.getGlobalTurnover);
 
 
 router.get("/other-reward", adminMiddleware, UserController.getOtherReward);

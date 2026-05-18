@@ -1078,9 +1078,124 @@ const getTodayBannedUsers = async (request, response) => {
     return err;
   }
 };
+
+/**
+ * Cash Inflow — stake transactions (users buying/staking tokens)
+ * GET /admin/cash-inflow?page&limit&startDate&endDate
+ */
+const getCashInflow = async (request, response) => {
+  try {
+    const { page = 1, limit = 10, startDate, endDate } = request.query;
+    const skip = (page - 1) * limit;
+    const matchQuery = { status: DEFAULT_STATUS.ACTIVE };
+    if (startDate && endDate) {
+      matchQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    }
+    const [data, totalCount, agg] = await Promise.all([
+      Stake.find(matchQuery)
+        .populate('userId', 'name userName email walletAddress')
+        .sort({ createdAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean(),
+      Stake.countDocuments(matchQuery),
+      Stake.aggregate([{ $match: matchQuery }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    ]);
+    return response.status(200).json({
+      success: true,
+      message: 'Cash inflow fetched successfully.',
+      data,
+      totalAmount: agg[0]?.total || 0,
+      totalCount,
+      paginate: createPaginator.paginate(totalCount, limit, page),
+    });
+  } catch (err) {
+    console.error('getCashInflow error:', err);
+    return response.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * Cash Outflow — withdrawal transactions
+ * GET /admin/cash-outflow?page&limit&startDate&endDate
+ */
+const getCashOutflow = async (request, response) => {
+  try {
+    const { page = 1, limit = 10, startDate, endDate } = request.query;
+    const skip = (page - 1) * limit;
+    const matchQuery = { status: DEFAULT_STATUS.ACTIVE };
+    if (startDate && endDate) {
+      matchQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    }
+    const [data, totalCount, agg] = await Promise.all([
+      Withdrawal.find(matchQuery)
+        .populate('userId', 'name userName email walletAddress')
+        .sort({ createdAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean(),
+      Withdrawal.countDocuments(matchQuery),
+      Withdrawal.aggregate([{ $match: matchQuery }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    ]);
+    return response.status(200).json({
+      success: true,
+      message: 'Cash outflow fetched successfully.',
+      data,
+      totalAmount: agg[0]?.total || 0,
+      totalCount,
+      paginate: createPaginator.paginate(totalCount, limit, page),
+    });
+  } catch (err) {
+    console.error('getCashOutflow error:', err);
+    return response.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * Global Turnover — all token exchange transactions (buy + sell)
+ * GET /admin/global-turnover?page&limit&startDate&endDate
+ */
+const getGlobalTurnover = async (request, response) => {
+  try {
+    const { page = 1, limit = 10, startDate, endDate } = request.query;
+    const skip = (page - 1) * limit;
+    const matchQuery = {};
+    if (startDate && endDate) {
+      matchQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    }
+    const [data, totalCount, agg] = await Promise.all([
+      TokenExchange.find(matchQuery)
+        .populate('userId', 'name userName email walletAddress')
+        .sort({ createdAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean(),
+      TokenExchange.countDocuments(matchQuery),
+      TokenExchange.aggregate([{ $match: matchQuery }, { $group: { _id: null, total: { $sum: '$usdtAmount' } } }]),
+    ]);
+    return response.status(200).json({
+      success: true,
+      message: 'Global turnover fetched successfully.',
+      data,
+      totalAmount: agg[0]?.total || 0,
+      totalCount,
+      paginate: createPaginator.paginate(totalCount, limit, page),
+    });
+  } catch (err) {
+    console.error('getGlobalTurnover error:', err);
+    return response.status(500).json({ success: false, message: err.message });
+  }
+};
 const getOtherReward = async (req, response) => {
   try {
-    const { page = 1, limit = 10, type, startDate, endDate, search } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      type,
+      startDate,
+      endDate,
+      search,
+    } = req.query;
 
     const { rewardsWithLevels, total } = await admin.getOtherReward({
       page: parseInt(page),
@@ -1095,10 +1210,15 @@ const getOtherReward = async (req, response) => {
       success: true,
       message: "Details found successfully.",
       rewards: rewardsWithLevels,
-      paginate: createPaginator.paginate(total, limit, page),
+      paginate: createPaginator.paginate(
+        total,
+        parseInt(limit),
+        parseInt(page)
+      ),
     });
   } catch (error) {
     console.error("Error in getOtherReward controller:", error);
+
     return response.status(500).json({
       success: false,
       message: "An internal server error occurred.",
@@ -1114,7 +1234,12 @@ const getReferralByType = async (request, response) => {
     const team = await Team.findOne({ userId: new ObjectId(userId) });
     const teamId = team?._id;
     if (!team) {
-      return response.status(201).json({ data: [] });
+      return response.status(200).json({
+        data: [],
+        total: 0,
+        totalBussiness: 0,
+        paginate: createPaginator.paginate(0, limit, page),
+      });
     }
 
     let data = [];
@@ -1129,10 +1254,10 @@ const getReferralByType = async (request, response) => {
         break;
       case "downlineActive":
         referralStatus = DEFAULT_STATUS.ACTIVE;
-
         break;
       case "directPending":
         referralStatus = DEFAULT_STATUS.BANNED;
+        break;
       case "downlinePending":
         referralStatus = DEFAULT_STATUS.BANNED;
         break;
@@ -1140,96 +1265,49 @@ const getReferralByType = async (request, response) => {
         break;
     }
 
-    if (
-      type === "direct"
-    ) {
+    if (type === "direct") {
       data = await admin.activePendingReferralListAdmin(
-        teamId,
-        1,
-        null,
-        page,
-        limit,
-        startDate,   // Add these two parameters for the date range
-        endDate,
-        userName
+        teamId, 1, null, page, limit, startDate, endDate, userName
       );
-      total = await admin.numOfActivePendigReferralsAdmin(
-        teamId,
-        1,
-        null,
-        startDate,
-        endDate
-      );
-      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(
-        teamId,
-        1,
-        null,
-        startDate,
-        endDate
-      );
-    } else if (
-      type === "directActive" ||
-      type === "directPending"
-    ) {
+      total = await admin.numOfActivePendigReferralsAdmin(teamId, 1, null, startDate, endDate);
+      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(teamId, 1, null, startDate, endDate);
+    } else if (type === "directActive" || type === "directPending") {
       data = await admin.activePendingReferralListAdmin(
-        teamId,
-        1,
-        referralStatus,
-        page,
-        limit,
-        startDate,
-        endDate,
-        userName
+        teamId, 1, referralStatus, page, limit, startDate, endDate, userName
       );
-      total = await admin.numOfActivePendigReferralsAdmin(
-        teamId,
-        1,
-        referralStatus,
-        startDate,
-        endDate
-      );
-      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(
-        teamId,
-        1,
-        referralStatus,
-        startDate,
-        endDate
-      );
+      total = await admin.numOfActivePendigReferralsAdmin(teamId, 1, referralStatus, startDate, endDate);
+      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(teamId, 1, referralStatus, startDate, endDate);
     } else if (type === "downlineActive" || type === "downlinePending") {
       data = await admin.activePendingReferralListAdmin(
-        teamId,
-        { $ne: 1 },
-        referralStatus,
-        page,
-        limit,
-        startDate,
-        endDate,
-        userName
+        teamId, { $ne: 1 }, referralStatus, page, limit, startDate, endDate, userName
       );
-      total = await admin.numOfActivePendigReferralsAdmin(
-        teamId,
-        { $ne: 1 },
-        referralStatus,
-        startDate,
-        endDate
+      total = await admin.numOfActivePendigReferralsAdmin(teamId, { $ne: 1 }, referralStatus, startDate, endDate);
+      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(teamId, { $ne: 1 }, referralStatus, startDate, endDate);
+    } else {
+      // No type — return all team members (any level, any status)
+      data = await admin.activePendingReferralListAdmin(
+        teamId, null, null, page, limit, startDate, endDate, userName
       );
-      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(
-        teamId,
-        { $ne: 1 },
-        referralStatus,
-        startDate,
-        endDate
-      );
+      total = await admin.numOfActivePendigReferralsAdmin(teamId, null, null, startDate, endDate);
+      totalBussiness = await admin.numOfDirectReferralBussinessAdmin(teamId, null, null, startDate, endDate);
     }
-    // console.log("data",data?.data,data?.totalStakingSum)
+
+    // Guard: data may be an empty array when no results found
+    const rows         = Array.isArray(data) ? [] : (data?.data ?? []);
+    const totalCount   = Array.isArray(data) ? 0  : (data?.totalCount ?? 0);
+    const totalStaking = Array.isArray(data) ? 0  : (data?.totalStakingSum ?? 0);
+
     return response.status(HTTP_STATUS_CODE.OK).json({
-      data: data?.data,
-      total: data?.data.length > 0 ? data.totalCount : 0,
-      totalBussiness: data?.totalStakingSum,
-      paginate: createPaginator.paginate(data?.data.length > 0 ? data?.totalCount : 0, limit, page),
+      data: rows,
+      total: rows.length > 0 ? totalCount : 0,
+      totalBussiness: totalStaking,
+      paginate: createPaginator.paginate(rows.length > 0 ? totalCount : 0, limit, page),
     });
   } catch (error) {
-    return response.status(HTTP_STATUS_CODE.INTERNAL_SERVER).json(error);
+    console.error('getReferralByType error:', error);
+    return response.status(HTTP_STATUS_CODE.INTERNAL_SERVER).json({
+      message: error.message || 'Internal server error',
+    });
   }
 };
 const saveTokenRate = async (request, response) => {
@@ -1402,5 +1480,8 @@ module.exports = {
   getTodayUsers,
   updateUserWithdrawStatus,
   updateUserLevelIncomeRewardStatus,
-  getTodayBannedUsers
+  getTodayBannedUsers,
+  getCashInflow,
+  getCashOutflow,
+  getGlobalTurnover,
 };

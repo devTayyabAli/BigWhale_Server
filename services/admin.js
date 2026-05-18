@@ -1266,7 +1266,8 @@ const activePendingReferralListAdmin = async (
       {
         $match: {
           teamId: new ObjectId(teamId),
-          level: level,
+          // Only filter by level when it's explicitly provided (not null/undefined)
+          ...(level !== null && level !== undefined ? { level } : {}),
         },
       },
 
