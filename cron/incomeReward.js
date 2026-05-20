@@ -16,10 +16,10 @@ const Stake = require("../models/stake.model");
 let timeout;
 let retryCount = 0;
 
-const timeString = process.env.APP_ENV !== 'production' ? 10 : 24;
-const durationString = process.env.APP_ENV !== 'production' ? "minutes" : "hour";
+const timeString = process.env.APP_ENV == 'production' ? 10 : 24;
+const durationString = process.env.APP_ENV == 'production' ? "minutes" : "hour";
 const cronTiming =
-  process.env.APP_ENV !== 'production'
+  process.env.APP_ENV == 'production'
     ? "0 * * * *"
     : "5 0 * * *";
 const saveIncomeRewardCron = cron.schedule(cronTiming, async () => {
