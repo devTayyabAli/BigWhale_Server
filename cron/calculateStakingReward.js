@@ -8,10 +8,11 @@ const { sendCappingLimitEmail } = require("../helpers/mail");
 const referral = require("../services/referral");
 const {
   momentToSubtract,
-  momentFormated,
-  momentFormatedWithSetTime,momentTimezone,
+  momentFormatedWithSetTime,
+  momentTimezone,
 } = require("../helpers/moment");
 const userStakingReward = require("../models/userStakingReward.model");
+
 const timeString = process.env.APP_ENV !== "production" ? 10 : 24;
 const durationString =
   process.env.APP_ENV !== "production" ? "minutes" : "hour";
@@ -31,19 +32,18 @@ const stakeRewardCron = async () => {
     );
     const percentage = await getSettingWithKey(SETTING.STAKE_REWARD_PER_DAY);
 
-    // const userRewardToInsert = [];
-    // const idsToUpdate = [];
-
     for (const stake of activeStakes) {
       if (!stake?.userId?._id) {
         continue;
       }
-      const capping = await referral.handleCappingEvent(stake?.userId?._id);
 
+      // Bug fix 1: use `continue` not `break` — a capped user should not
+      // stop rewards for every other user in the list.
+      const capping = await referral.handleCappingEvent(stake?.userId?._id);
       if (capping?.isCappingReached) {
-        isCappingReached = true;
-        sendCappingLimitEmail(stake?.userId?.email);
-        break;
+        // Bug fix 3: await the email so errors surface in logs
+        await sendCappingLimitEmail(stake?.userId?.email);
+        continue; // skip only this stake, keep processing others
       }
 
       const lastReward =
@@ -51,60 +51,44 @@ const stakeRewardCron = async () => {
           stake?._id,
           twentyFourHoursAgo
         );
-      const hours = stake?.createdAt.getUTCHours(); // Get the hours (0-23)
-      const minutes = stake?.createdAt.getUTCMinutes(); // Get the minutes (0-59)
-      const seconds = stake?.createdAt.getUTCSeconds(); // Get the seconds (0-59)
-      const milliseconds = stake?.createdAt.getMilliseconds(); // Get the milliseconds (0-999)
-      const time = {
-        hour: hours,
-        minute: minutes,
-        second: seconds,
-        millisecond: milliseconds,
-      };
+
       if (!lastReward) {
         const amount = calculatePercentage(percentage, stake?.amount);
-        //old
-        // userRewardToInsert.push({
-        //   userId: stake?.userId?._id,
-        //   stakeId: stake?._id,
-        //   amount: amount,
-        //   createdAt: momentFormatedWithSetTime(time),
-        // });
 
-        //new
+        // Extract time-of-day from the original stake's creation time.
+        // Use local (timezone-adjusted) time components, not UTC, so the
+        // reward timestamp stays aligned with the stake's local creation time.
+        const localCreatedAt = momentTimezone(stake?.createdAt);
+        const time = {
+          hour:        localCreatedAt.hours(),
+          minute:      localCreatedAt.minutes(),
+          second:      localCreatedAt.seconds(),
+          millisecond: localCreatedAt.milliseconds(),
+        };
+
+        const rewardTimestamp = momentFormatedWithSetTime(momentTimezone(), time);
+
+        // Bug fix 5: write the reward record and update lastReward together.
+        // If either fails the error is caught and logged; the stake will be
+        // retried on the next cron tick because lastReward won't have advanced.
         await userStakingReward.create({
           userId: stake?.userId?._id,
           stakeId: stake?._id,
-          amount: amount,
-          createdAt: momentFormatedWithSetTime(momentTimezone(),time),
+          amount,
+          createdAt: rewardTimestamp,
         });
-        
-      
-        //old
-        // idsToUpdate.push(stake?._id);
 
-        //new
-        await Stake.findOneAndUpdate({_id:stake?._id},{lastReward:momentFormatedWithSetTime(momentTimezone(),time)});
+        await Stake.findOneAndUpdate(
+          { _id: stake?._id },
+          { lastReward: rewardTimestamp }
+        );
       }
     }
-    //old
-    // // console.log("userRewardToInsert", userRewardToInsert);
-    // await services.userStakingRewardService.createUserStakingRewards(
-    //   userRewardToInsert
-    // );
 
-    // await Stake.updateMany(
-    //   {
-    //     _id: { $in: idsToUpdate },
-    //   },
-    //   { lastReward: momentFormated() }
-    // );
-
-    // event to refetch withdrawal amount for all users
+    // Notify all clients to refetch their withdrawal amount
     socket.io.emit("withdrawAmount", {});
   } catch (error) {
     console.error("Error while adding stake reward:", error);
-    // Handle errors here
   }
 };
 
