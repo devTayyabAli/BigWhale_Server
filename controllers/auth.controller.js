@@ -1030,6 +1030,14 @@ try {
    * GET /auth/whatsapp-check/:userId
    */
   static async checkWhatsAppCode(req, res) {
+    // Disable all caching — every poll must get a fresh response from the DB.
+    // Without this, Express sends 304 Not Modified and the frontend never
+    // sees whatsappJoined: true even after the webhook updates the DB.
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+
     let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
     try {
       const { userId } = req.params;
@@ -1039,7 +1047,7 @@ try {
       const result = await checkWhatsAppCodeReceived(userId);
 
       if (result.verified) {
-        // Also emit socket so the frontend updates instantly even if it
+        // Emit socket so the frontend updates instantly even if it
         // detects verification via polling rather than the webhook event
         const io = req.app.get("io");
         if (io) io.to(userId).emit("whatsappVerified", { whatsappJoined: true });
@@ -1050,7 +1058,7 @@ try {
         response.data    = { whatsappJoined: true };
       } else {
         response.success = false;
-        response.status  = 200; // 200 so frontend doesn't treat it as an error
+        response.status  = 200;
         response.message = result.reason || "Not verified yet";
         response.data    = { whatsappJoined: false };
       }
