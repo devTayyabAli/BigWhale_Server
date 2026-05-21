@@ -39,6 +39,9 @@ const io = socketIo(server, {
 // Socket.io Connection
 socket.configure(io);
 
+// ── Make io accessible in route handlers via req.app.get("io") ───────
+app.set("io", io);
+
 io.on("connection", (socketIo) => {
   socketIo.on("comment", (msg) => {
     io.emit("new-comment", msg);

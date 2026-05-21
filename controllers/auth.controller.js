@@ -1025,9 +1025,8 @@ try {
   }
 
   /**
-   * @description Poll endpoint — frontend calls this every 3s after user sends the code.
-   * Reads recent messages from Meta Cloud API to find the matching code.
-   * Works WITHOUT webhook / app publishing.
+   * @description Poll endpoint — frontend calls this every 3s.
+   * Reads DB only — returns verified once the webhook has updated it.
    * GET /auth/whatsapp-check/:userId
    */
   static async checkWhatsAppCode(req, res) {
@@ -1040,6 +1039,8 @@ try {
       const result = await checkWhatsAppCodeReceived(userId);
 
       if (result.verified) {
+        // Also emit socket so the frontend updates instantly even if it
+        // detects verification via polling rather than the webhook event
         const io = req.app.get("io");
         if (io) io.to(userId).emit("whatsappVerified", { whatsappJoined: true });
 
@@ -1049,7 +1050,7 @@ try {
         response.data    = { whatsappJoined: true };
       } else {
         response.success = false;
-        response.status  = 200;
+        response.status  = 200; // 200 so frontend doesn't treat it as an error
         response.message = result.reason || "Not verified yet";
         response.data    = { whatsappJoined: false };
       }
@@ -1064,11 +1065,57 @@ try {
   }
 
   /**
+   * @description DEV ONLY — simulate receiving a WhatsApp message.
+   * Lets you test the full verification flow without ngrok or Meta webhook.
+   * POST /auth/whatsapp-simulate  { code: "A3F9C2" }
+   *
+   * In production this endpoint should be removed or protected.
+   */
+  static async simulateWhatsAppMessage(req, res) {
+    let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
+    try {
+      // Only allow in development
+      if (process.env.APP_ENV === "production") {
+        response.message = "Not available in production";
+        response.status  = 403;
+        return;
+      }
+
+      const { code } = req.body;
+      if (!code) { response.message = "code is required"; response.status = 400; return; }
+
+      const { handleIncomingWhatsAppMessage } = require("../services/whatsappVerification");
+      // Simulate a message from a dummy phone number
+      const result = await handleIncomingWhatsAppMessage("00000000000", `VERIFY-${code.toUpperCase()}`);
+
+      if (result.verified) {
+        const io = req.app.get("io");
+        if (io && result.userId) {
+          io.to(result.userId).emit("whatsappVerified", { whatsappJoined: true });
+        }
+        response.success = true;
+        response.status  = 200;
+        response.message = "Simulated — WhatsApp verified!";
+        response.data    = { whatsappJoined: true, userId: result.userId };
+      } else {
+        response.success = false;
+        response.status  = 400;
+        response.message = result.reason || "Simulation failed";
+        response.data    = { whatsappJoined: false };
+      }
+    } catch (err) {
+      console.error("simulateWhatsAppMessageError:", err);
+      response.message = err.message || "An internal server error occurred";
+      response.status  = 500;
+      response.success = false;
+    } finally {
+      return res.status(response.status).json(response);
+    }
+  }
+
+  /**
    * @description Generate a WhatsApp verification code for a user
    * POST /auth/whatsapp-code  { userId }
-   *
-   * Returns a wa.me deep-link the frontend opens so the user sends
-   * "VERIFY-XXXXXX" to the business number. No "I've Joined" button needed.
    */
   static async generateWhatsAppCode(req, res) {
     let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
@@ -1087,6 +1134,7 @@ try {
       response.message = "Verification code generated.";
       response.data    = {
         link:      result.link,
+        code:      result.code,   // included so dev can use simulate endpoint
         expiresAt: result.expiresAt,
       };
     } catch (err) {

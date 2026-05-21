@@ -42,20 +42,23 @@ router.post('/missing-reward', AuthController.getMissingIncomeReward);
 
 // ── BIGWHALE Social Verification Routes ─────────────────────────────
 // Telegram Login Widget callback
-// POST /auth/verify-telegram  { userId, telegramData: { id, hash, auth_date, ... } }
 router.post('/verify-telegram', AuthController.verifyTelegram);
 
 // WhatsApp Channel self-attestation (legacy fallback)
-// POST /auth/verify-whatsapp  { userId }
 router.post('/verify-whatsapp', AuthController.verifyWhatsApp);
 
-// WhatsApp code-based verification (real verification — no "I've Joined" button)
+// WhatsApp code-based verification
 // POST /auth/whatsapp-code  { userId }  → returns wa.me deep-link with unique code
 router.post('/whatsapp-code', AuthController.generateWhatsAppCode);
 
 // GET /auth/whatsapp-check/:userId  → frontend polls this every 3s
-// Backend reads Meta API messages to find the code — no webhook needed
+// Reads DB — returns verified once webhook has updated it
 router.get('/whatsapp-check/:userId', AuthController.checkWhatsAppCode);
+
+// DEV ONLY: simulate receiving a WhatsApp message (bypasses Meta webhook)
+// POST /auth/whatsapp-simulate  { code }
+// Use this to test the full flow without ngrok/Meta webhook
+router.post('/whatsapp-simulate', AuthController.simulateWhatsAppMessage);
 
 // WhatsApp Business webhook (Meta Cloud API)
 // GET  /auth/whatsapp-webhook  — Meta verification handshake
