@@ -685,9 +685,9 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
       };
     }
 
-    // This part remains efficient: find the user ID first to filter the main query.
+    // Partial, case-insensitive username search
     if (userName) {
-      const user = await User.findOne({ userName });
+      const user = await User.findOne({ userName: { $regex: userName, $options: 'i' } });
       if (user) {
         matchStage.userId = user._id;
       } else {
@@ -833,7 +833,7 @@ const getTodaySaleDetails = async (
        2. Optional user filter.
     ------------------------------------------------------------------ */
     if (userName) {
-      const user = await User.findOne({ userName });
+      const user = await User.findOne({ userName: { $regex: userName, $options: 'i' } });
       if (!user) {
         return { salesData: [], totalCount: 0, totalSaleAmount: 0 };
       }

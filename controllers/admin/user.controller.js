@@ -1152,27 +1152,33 @@ const getCashOutflow = async (request, response) => {
 };
 
 /**
- * Global Turnover — all token exchange transactions (buy + sell)
+ * Global Turnover — total active stake amounts across the platform.
+ * Mirrors the logic used by the daily reward cron (calculateGlobalTurnOver).
  * GET /admin/global-turnover?page&limit&startDate&endDate
  */
 const getGlobalTurnover = async (request, response) => {
   try {
     const { page = 1, limit = 10, startDate, endDate } = request.query;
     const skip = (page - 1) * limit;
-    const matchQuery = {};
+
+    // Base filter: only confirmed active stakes
+    const matchQuery = { status: DEFAULT_STATUS.ACTIVE, transactionId: { $exists: true, $ne: null } };
     if (startDate && endDate) {
       matchQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
+
     const [data, totalCount, agg] = await Promise.all([
-      TokenExchange.find(matchQuery)
+      Stake.find(matchQuery)
         .populate('userId', 'name userName email walletAddress')
+        .populate('transactionId')
         .sort({ createdAt: -1 })
         .skip(Number(skip))
         .limit(Number(limit))
         .lean(),
-      TokenExchange.countDocuments(matchQuery),
-      TokenExchange.aggregate([{ $match: matchQuery }, { $group: { _id: null, total: { $sum: '$usdtAmount' } } }]),
+      Stake.countDocuments(matchQuery),
+      Stake.aggregate([{ $match: matchQuery }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
     ]);
+
     return response.status(200).json({
       success: true,
       message: 'Global turnover fetched successfully.',
