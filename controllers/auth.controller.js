@@ -1025,6 +1025,45 @@ try {
   }
 
   /**
+   * @description Poll endpoint — frontend calls this every 3s after user sends the code.
+   * Reads recent messages from Meta Cloud API to find the matching code.
+   * Works WITHOUT webhook / app publishing.
+   * GET /auth/whatsapp-check/:userId
+   */
+  static async checkWhatsAppCode(req, res) {
+    let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
+    try {
+      const { userId } = req.params;
+      if (!userId) { response.message = "userId is required"; response.status = 400; return; }
+
+      const { checkWhatsAppCodeReceived } = require("../services/whatsappVerification");
+      const result = await checkWhatsAppCodeReceived(userId);
+
+      if (result.verified) {
+        const io = req.app.get("io");
+        if (io) io.to(userId).emit("whatsappVerified", { whatsappJoined: true });
+
+        response.success = true;
+        response.status  = 200;
+        response.message = "WhatsApp verified!";
+        response.data    = { whatsappJoined: true };
+      } else {
+        response.success = false;
+        response.status  = 200;
+        response.message = result.reason || "Not verified yet";
+        response.data    = { whatsappJoined: false };
+      }
+    } catch (err) {
+      console.error("checkWhatsAppCodeError:", err);
+      response.message = err.message || "An internal server error occurred";
+      response.status  = 500;
+      response.success = false;
+    } finally {
+      return res.status(response.status).json(response);
+    }
+  }
+
+  /**
    * @description Generate a WhatsApp verification code for a user
    * POST /auth/whatsapp-code  { userId }
    *

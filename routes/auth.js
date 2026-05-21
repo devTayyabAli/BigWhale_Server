@@ -53,6 +53,10 @@ router.post('/verify-whatsapp', AuthController.verifyWhatsApp);
 // POST /auth/whatsapp-code  { userId }  → returns wa.me deep-link with unique code
 router.post('/whatsapp-code', AuthController.generateWhatsAppCode);
 
+// GET /auth/whatsapp-check/:userId  → frontend polls this every 3s
+// Backend reads Meta API messages to find the code — no webhook needed
+router.get('/whatsapp-check/:userId', AuthController.checkWhatsAppCode);
+
 // WhatsApp Business webhook (Meta Cloud API)
 // GET  /auth/whatsapp-webhook  — Meta verification handshake
 // POST /auth/whatsapp-webhook  — incoming message events
