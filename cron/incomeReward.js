@@ -16,12 +16,18 @@ const Stake = require("../models/stake.model");
 let timeout;
 let retryCount = 0;
 
-const timeString = process.env.APP_ENV == 'production' ? 10 : 24;
-const durationString = process.env.APP_ENV == 'production' ? "minutes" : "hour";
-const cronTiming =
-  process.env.APP_ENV == 'production'
-    ? "0 * * * *"
-    : "5 0 * * *";
+
+// const timeString = process.env.APP_ENV == 'production' ? 10 : 24;
+// const durationString = process.env.APP_ENV == 'production' ? "minutes" : "hour";
+// const cronTiming =
+//   process.env.APP_ENV == 'production'
+//     ? "0 * * * *"
+//     : "5 0 * * *";
+
+// Run every hour in all environments
+const timeString = 1;
+const durationString = "hour";
+const cronTiming = "0 * * * *"; // every hour, every environment
 const saveIncomeRewardCron = cron.schedule(cronTiming, async () => {
   try {
     console.log("🚀 ~ saveIncomeRewardCron started");
