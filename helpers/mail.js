@@ -23,13 +23,15 @@ const sendEmail = async (to, subject, html) => {
   const msg = { from: process.env.MAIL_FROM, to, subject, html };
   await transporter.sendMail(msg);
 };
-const sendVerifyEmailOTP = async (email, code) => {
+const sendVerifyEmailOTP = async (email, code, userName = null, password = null) => {
   try {
     if (!email) return;
     const subject = EMAIL_SUBJECT.REGISTER;
     const emailData = [];
     emailData.code = code;
     emailData.email = email;
+    emailData.userName = userName;
+    emailData.password = password;
     emailData.subject = EMAIL_SUBJECT.REGISTER;
     const html = await ejs.renderFile(
       path.join(
@@ -43,7 +45,6 @@ const sendVerifyEmailOTP = async (email, code) => {
 
      // Send email to both user and admin
      await Promise.all(recipients.map((email) => sendEmail(email, subject, html)));
-    // await sendEmail(email, subject, html);
   } catch (error) {
     console.log("sendVerifyEmailOTPError", error);
     return error;

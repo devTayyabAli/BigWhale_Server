@@ -1,24 +1,105 @@
 <%- include('layout/header.ejs', { subject: subject }) %>
 
+<!-- Title -->
 <tr>
-    <td valign="top" style="text-align:center;background-color:#fff;padding:0 20px 20px;">
-        <span style="color:#3e2837;font-size: 22px;font-family:'Manrope', sans-serif;font-weight:700;">
-            <b> <%=subject%> </b>
-        </span>
-    </td>
+  <td valign="top" style="text-align:center; background-color:#ffffff; padding: 30px 40px 10px;">
+    <h1 style="margin:0; font-size:24px; font-weight:700; font-family:'Manrope', sans-serif; color:#1a1a2e;">
+      Welcome to <%=process.env.APP_NAME%> 🎉
+    </h1>
+    <p style="margin:10px 0 0; font-size:15px; font-family:'Manrope', sans-serif; color:#666666;">
+      Your account has been created. Please verify your email to get started.
+    </p>
+  </td>
 </tr>
-<tr>
-    <td valign="top" style="color:#92778a;text-align:center;font-size:16px;font-family:'Manrope', sans-serif;font-weight:500;background-color:#fff;padding:0 30px;">
-        <p>Welcome to <%=process.env.APP_NAME%>.</p>
-        <p> Thank you for signing up for <%=process.env.APP_NAME%>. Your registered email is <%=email%> . Use this 6 digit OTP code <%=code%> to complete your verification </p>
-    </td>
-</tr>
-<tr>
-    <td valign="top" style="padding-top:30px;text-align:center;background-color:#fff;">
-        <span>
 
-        </span>
-    </td>
+<!-- Divider -->
+<tr>
+  <td style="background-color:#ffffff; padding: 0 40px;">
+    <hr style="border:none; border-top:1px solid #f0f0f0; margin:20px 0;">
+  </td>
+</tr>
+
+<!-- Credentials Section -->
+<tr>
+  <td style="background-color:#ffffff; padding: 0 40px 10px;">
+    <p style="margin:0 0 16px; font-size:14px; font-family:'Manrope', sans-serif; color:#888888; text-transform:uppercase; letter-spacing:1px; font-weight:600;">
+      Your Account Credentials
+    </p>
+
+    <!-- Username -->
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;">
+      <tr>
+        <td style="background-color:#f0f7ff; border-left:4px solid #3b82f6; border-radius:8px; padding:14px 18px;">
+          <p style="margin:0 0 4px; font-size:11px; font-family:'Manrope', sans-serif; color:#3b82f6; font-weight:700; text-transform:uppercase; letter-spacing:1px;">
+            Username
+          </p>
+          <p style="margin:0; font-size:18px; font-family:'Manrope', sans-serif; color:#1e40af; font-weight:700; letter-spacing:0.5px;">
+            <% if (userName) { %><%= userName %><% } else { %>—<% } %>
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Password -->
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;">
+      <tr>
+        <td style="background-color:#fff7ed; border-left:4px solid #f97316; border-radius:8px; padding:14px 18px;">
+          <p style="margin:0 0 4px; font-size:11px; font-family:'Manrope', sans-serif; color:#f97316; font-weight:700; text-transform:uppercase; letter-spacing:1px;">
+            Password
+          </p>
+          <p style="margin:0; font-size:18px; font-family:'Manrope', sans-serif; color:#c2410c; font-weight:700; letter-spacing:2px;">
+            <% if (password) { %><%= password %><% } else { %>••••••••<% } %>
+          </p>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+
+<!-- Divider -->
+<tr>
+  <td style="background-color:#ffffff; padding: 0 40px;">
+    <hr style="border:none; border-top:1px solid #f0f0f0; margin:10px 0 20px;">
+  </td>
+</tr>
+
+<!-- OTP Section -->
+<tr>
+  <td style="background-color:#ffffff; padding: 0 40px 30px; text-align:center;">
+    <p style="margin:0 0 16px; font-size:14px; font-family:'Manrope', sans-serif; color:#888888; text-transform:uppercase; letter-spacing:1px; font-weight:600;">
+      Email Verification Code
+    </p>
+    <table align="center" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td style="background: linear-gradient(135deg, #7c3aed, #a855f7); border-radius:12px; padding:20px 48px;">
+          <p style="margin:0 0 4px; font-size:11px; font-family:'Manrope', sans-serif; color:#e9d5ff; font-weight:600; text-transform:uppercase; letter-spacing:2px;">
+            One-Time Password
+          </p>
+          <p style="margin:0; font-size:38px; font-family:'Manrope', sans-serif; color:#ffffff; font-weight:800; letter-spacing:10px;">
+            <%=code%>
+          </p>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:16px 0 0; font-size:13px; font-family:'Manrope', sans-serif; color:#999999;">
+      This code expires soon. Do not share it with anyone.
+    </p>
+  </td>
+</tr>
+
+<!-- Warning Box -->
+<tr>
+  <td style="background-color:#ffffff; padding: 0 40px 30px;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td style="background-color:#fef9c3; border-radius:8px; padding:14px 18px;">
+          <p style="margin:0; font-size:13px; font-family:'Manrope', sans-serif; color:#854d0e;">
+            ⚠️ <strong>Security Notice:</strong> Never share your password or OTP with anyone. <%=process.env.APP_NAME%> will never ask for these details.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </td>
 </tr>
 
 <%- include('layout/footer.ejs') %>

@@ -32,7 +32,7 @@ const { getSettingWithKey } = require("../helpers/setting");
     if (user?._id) {
       socket.io.to(`${user?._id}`).emit(CONTRACT_EVENTS.REGISTER, {});
       const otpCode = Math.floor(100000 + Math.random() * 900000);
-      await sendVerifyEmailOTP(user?.email, otpCode);
+      await sendVerifyEmailOTP(user?.email, otpCode, user?.userName);
       const otpExpiryDuration = await getSettingWithKey(SETTING.OTP_EXPIRY_DURATION);
       const otpExpiryUnit = await getSettingWithKey(SETTING.OTP_EXPIRY_UNIT);
       const otpExpiry = moment().add(otpExpiryDuration, otpExpiryUnit);

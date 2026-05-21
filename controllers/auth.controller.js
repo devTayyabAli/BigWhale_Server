@@ -767,7 +767,7 @@ try {
       }
 
       const otp = Math.floor(100000 + Math.random() * 900000);
-      const info = await sendVerifyEmailOTP(email, otp);
+      const info = await sendVerifyEmailOTP(email, otp, user?.userName);
       if (info?.accepted?.length < 0) {
         response.success = false;
         response.status = 400;
