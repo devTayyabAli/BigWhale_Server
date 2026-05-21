@@ -36,6 +36,7 @@ const deleteSameDayStakeReward = cron.schedule(cronTiming, async () => {
 
         await UserOtherReward.findOneAndDelete({
           stakeId: stake?._id,
+          type: { $ne: "instant_bonus" }, // Never delete instant_bonus — it's earned on stake day
           $expr: {
             $and: [
               { $eq: [{ $year: "$createdAt" }, year] },
