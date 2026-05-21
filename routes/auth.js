@@ -45,9 +45,19 @@ router.post('/missing-reward', AuthController.getMissingIncomeReward);
 // POST /auth/verify-telegram  { userId, telegramData: { id, hash, auth_date, ... } }
 router.post('/verify-telegram', AuthController.verifyTelegram);
 
-// WhatsApp Channel self-attestation
+// WhatsApp Channel self-attestation (legacy fallback)
 // POST /auth/verify-whatsapp  { userId }
 router.post('/verify-whatsapp', AuthController.verifyWhatsApp);
+
+// WhatsApp code-based verification (real verification — no "I've Joined" button)
+// POST /auth/whatsapp-code  { userId }  → returns wa.me deep-link with unique code
+router.post('/whatsapp-code', AuthController.generateWhatsAppCode);
+
+// WhatsApp Business webhook (Meta Cloud API)
+// GET  /auth/whatsapp-webhook  — Meta verification handshake
+// POST /auth/whatsapp-webhook  — incoming message events
+router.get('/whatsapp-webhook',  AuthController.whatsappWebhookVerify);
+router.post('/whatsapp-webhook', AuthController.whatsappWebhookReceive);
 
 // GET  /auth/social-status/:userId
 router.get('/social-status/:userId', AuthController.getSocialStatus);

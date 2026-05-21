@@ -163,7 +163,7 @@ const userSchema = new mongoose.Schema(
     },
     // ── BIGWHALE Social Confirmation ──────────────────────────────
     socialConfirmed: {
-      // Telegram
+      // Telegram (kept for legacy data, no longer required)
       telegramJoined: {
         type: Boolean,
         default: false,
@@ -176,12 +176,28 @@ const userSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
-      // WhatsApp Channel
+      // WhatsApp Channel — the only required social gate
       whatsappJoined: {
         type: Boolean,
         default: false,
       },
       whatsappVerifiedAt: {
+        type: Date,
+        default: null,
+      },
+      // Tracks when we last confirmed the user is still in the channel.
+      // If now - whatsappLastCheckedAt > RE_VERIFY_WINDOW_MS, we reset
+      // whatsappJoined so the user must confirm again (real-time monitoring).
+      whatsappLastCheckedAt: {
+        type: Date,
+        default: null,
+      },
+      // One-time verification code sent via wa.me deep-link
+      whatsappVerifyCode: {
+        type: String,
+        default: null,
+      },
+      whatsappVerifyExpiresAt: {
         type: Date,
         default: null,
       },

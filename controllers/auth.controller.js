@@ -1025,12 +1025,118 @@ try {
   }
 
   /**
+   * @description Generate a WhatsApp verification code for a user
+   * POST /auth/whatsapp-code  { userId }
+   *
+   * Returns a wa.me deep-link the frontend opens so the user sends
+   * "VERIFY-XXXXXX" to the business number. No "I've Joined" button needed.
+   */
+  static async generateWhatsAppCode(req, res) {
+    let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
+    try {
+      const { userId } = req.body;
+      if (!userId) { response.message = "userId is required"; response.status = 400; return; }
+
+      const user = await User.findById(userId);
+      if (!user) { response.message = "User not found"; response.status = 404; return; }
+
+      const { generateWhatsAppCode } = require("../services/whatsappVerification");
+      const result = await generateWhatsAppCode(userId);
+
+      response.success = true;
+      response.status  = 200;
+      response.message = "Verification code generated.";
+      response.data    = {
+        link:      result.link,
+        expiresAt: result.expiresAt,
+      };
+    } catch (err) {
+      console.error("generateWhatsAppCodeError:", err);
+      response.message = err.message || "An internal server error occurred";
+      response.status  = 500;
+      response.success = false;
+    } finally {
+      return res.status(response.status).json(response);
+    }
+  }
+
+  /**
+   * @description WhatsApp Business webhook — receives incoming messages
+   *
+   * GET  /auth/whatsapp-webhook  — webhook verification (Meta handshake)
+   * POST /auth/whatsapp-webhook  — incoming message events
+   *
+   * When a user sends "VERIFY-XXXXXX" to your WhatsApp Business number,
+   * this handler matches the code, marks the user as verified, and emits
+   * a socket event so the frontend updates in real time.
+   */
+  static async whatsappWebhookVerify(req, res) {
+    // Meta webhook verification handshake
+    const mode      = req.query["hub.mode"];
+    const token     = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+      console.log("WhatsApp webhook verified.");
+      return res.status(200).send(challenge);
+    }
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  static async whatsappWebhookReceive(req, res) {
+    // Always respond 200 immediately so Meta doesn't retry
+    res.status(200).json({ status: "ok" });
+
+    try {
+      const body = req.body;
+      if (body?.object !== "whatsapp_business_account") return;
+
+      const entries = body?.entry || [];
+      for (const entry of entries) {
+        const changes = entry?.changes || [];
+        for (const change of changes) {
+          const messages = change?.value?.messages || [];
+          for (const msg of messages) {
+            if (msg?.type !== "text") continue;
+
+            const from    = msg?.from;           // sender phone, digits only
+            const text    = msg?.text?.body || "";
+
+            const { handleIncomingWhatsAppMessage, sendWhatsAppReply } = require("../services/whatsappVerification");
+            const result = await handleIncomingWhatsAppMessage(from, text);
+
+            if (result.verified) {
+              console.log(`WhatsApp verified userId=${result.userId} from=${from}`);
+
+              // Emit socket event so frontend updates instantly
+              const io = req.app.get("io");
+              if (io && result.userId) {
+                io.to(result.userId).emit("whatsappVerified", { whatsappJoined: true });
+              }
+
+              // Send a friendly reply (only if Meta Cloud API is configured)
+              await sendWhatsAppReply(
+                from,
+                "✅ You're verified! You can now proceed with your withdrawal on BIGWHALE."
+              );
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("whatsappWebhookReceive error:", err.message);
+    }
+  }
+
+  /**
    * @description Verify WhatsApp channel join — user self-attests they joined
    * POST /auth/verify-whatsapp  { userId }
    *
    * WhatsApp does not provide a public API to verify channel membership,
    * so we use a self-attestation model: the user clicks "I've Joined" and
    * we mark them as verified. This is the same pattern used by many platforms.
+   * We also record whatsappLastCheckedAt so the re-verification window can
+   * be enforced by getSocialStatus.
    */
   static async verifyWhatsApp(req, res) {
     let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
@@ -1049,11 +1155,13 @@ try {
         return;
       }
 
-      // Mark WhatsApp as joined
+      // Mark WhatsApp as joined and record the check timestamp
+      const now = new Date();
       await User.findByIdAndUpdate(userId, {
         $set: {
-          "socialConfirmed.whatsappJoined":     true,
-          "socialConfirmed.whatsappVerifiedAt": new Date(),
+          "socialConfirmed.whatsappJoined":        true,
+          "socialConfirmed.whatsappVerifiedAt":     now,
+          "socialConfirmed.whatsappLastCheckedAt":  now,
         },
       });
 
@@ -1074,6 +1182,12 @@ try {
   /**
    * @description Get social verification status for a user
    * GET /auth/social-status/:userId
+   *
+   * Real-time monitoring: if the user confirmed WhatsApp but hasn't been
+   * re-checked within RE_VERIFY_WINDOW_MS (default 24 h), we reset
+   * whatsappJoined to false so they must confirm again.
+   * This simulates "left the channel" detection since WhatsApp has no
+   * public membership API.
    */
   static async getSocialStatus(req, res) {
     let response = ResponseHelper.getResponse(false, "Something went wrong", {}, 400);
@@ -1085,16 +1199,39 @@ try {
       if (!user) { response.message = "User not found"; response.status = 404; return; }
 
       const sc = user.socialConfirmed || {};
+
+      // ── Re-verification window ────────────────────────────────────
+      // 24 hours — if user hasn't re-confirmed within this window,
+      // treat them as unverified (they may have left the channel).
+      const RE_VERIFY_WINDOW_MS = 24 * 60 * 60 * 1000;
+      let whatsappJoined = sc.whatsappJoined || false;
+
+      if (whatsappJoined && sc.whatsappLastCheckedAt) {
+        const elapsed = Date.now() - new Date(sc.whatsappLastCheckedAt).getTime();
+        if (elapsed > RE_VERIFY_WINDOW_MS) {
+          // Window expired — reset so user must re-confirm
+          whatsappJoined = false;
+          await User.findByIdAndUpdate(userId, {
+            $set: {
+              "socialConfirmed.whatsappJoined": false,
+              "socialConfirmed.whatsappLastCheckedAt": null,
+            },
+          });
+        }
+      }
+
       response.success = true;
       response.status  = 200;
       response.message = "Social status fetched successfully.";
       response.data    = {
-        telegramJoined:     sc.telegramJoined     || false,
-        telegramUsername:   sc.telegramUsername   || null,
-        telegramVerifiedAt: sc.telegramVerifiedAt || null,
-        whatsappJoined:     sc.whatsappJoined     || false,
-        whatsappVerifiedAt: sc.whatsappVerifiedAt || null,
-        bothConfirmed: (sc.telegramJoined === true) && (sc.whatsappJoined === true),
+        telegramJoined:          sc.telegramJoined     || false,
+        telegramUsername:        sc.telegramUsername   || null,
+        telegramVerifiedAt:      sc.telegramVerifiedAt || null,
+        whatsappJoined,
+        whatsappVerifiedAt:      sc.whatsappVerifiedAt || null,
+        whatsappLastCheckedAt:   sc.whatsappLastCheckedAt || null,
+        // bothConfirmed = WhatsApp only (Telegram removed from requirement)
+        bothConfirmed: whatsappJoined === true,
       };
     } catch (err) {
       console.error("getSocialStatusError:", err);
