@@ -16,18 +16,9 @@ const Stake = require("../models/stake.model");
 let timeout;
 let retryCount = 0;
 
-
-// const timeString = process.env.APP_ENV == 'production' ? 10 : 24;
-// const durationString = process.env.APP_ENV == 'production' ? "minutes" : "hour";
-// const cronTiming =
-//   process.env.APP_ENV == 'production'
-//     ? "0 * * * *"
-//     : "5 0 * * *";
-
-// Run every hour in all environments
-const timeString = 1;
-const durationString = "hour";
-const cronTiming = "0 * * * *"; // every hour, every environment
+const timeString = process.env.APP_ENV == 'production' ? 1 : 24;
+const durationString = process.env.APP_ENV == 'production' ? "hour" : "hour";
+const cronTiming = process.env.APP_ENV == 'production' ? "0 * * * *" : "5 0 * * *";
 const saveIncomeRewardCron = cron.schedule(cronTiming, async () => {
   try {
     console.log("🚀 ~ saveIncomeRewardCron started");
@@ -102,150 +93,145 @@ const saveIncomeLevelReward = async (skip = 0) => {
 };
 
 const upsertDataInUserOtherReward = async (user, startOfDay) => {
-  if (!user?._id) return;
+  if (user?._id) {
+    const team = await Team.findOne({ userId: user?._id });
+    const teamId = team?._id;
 
-  const team = await Team.findOne({ userId: user._id }).lean();
-  const teamId = team?._id;
-  if (!teamId) return;
+    // get array of unlocked referral income levels
 
-  // ── Check capping ONCE per user — before processing any members/stakes ──
-  // Previously this was inside the inner stakes loop = N×M DB calls per user
-  const capping = await referral.handleCappingEvent(user._id);
-  if (capping?.isCappingReached) {
-    console.log('cappingReached for user:', user._id);
-    await updateProcessedRecords(user, startOfDay);
-
-    // Re-fetch to get latest cappingEmailSentAt (user object is stale)
-    const freshUser = await User.findById(user._id).select('cappingEmailSentAt email').lean();
-    const alreadyNotified = freshUser?.cappingEmailSentAt &&
-      new Date(freshUser.cappingEmailSentAt) >= new Date(startOfDay);
-
-    if (!alreadyNotified) {
-      sendCappingLimitEmail(freshUser?.email || user.email);
-      await User.updateOne(
-        { _id: user._id },
-        { $set: { cappingEmailSentAt: new Date() } }
-      );
-      console.log(`Capping email sent to ${freshUser?.email || user.email}`);
-    } else {
-      console.log(`Capping email already sent this cycle for user: ${user._id}`);
-    }
-    return; // stop processing this user entirely
-  }
-
-  // ── Fetch unlocked income levels ──────────────────────────────────
-  const referralResult = await referral.referralIncomeLevel(teamId, user._id, DEFAULT_STATUS.ACTIVE);
-  const incomeLevelBonus = referralResult?.incomeLevelBonus || [];
-  const referralIncomeUnLockedLevels = incomeLevelBonus.filter(item => item.unlocked);
-
-  // ── Fetch team members with active stakes ─────────────────────────
-  const teamMembers = await TeamMember.aggregate([
-    { $match: { teamId } },
-    {
-      $lookup: {
-        from: "teams",
-        localField: "teamId",
-        foreignField: "_id",
-        as: "team",
-      },
-    },
-    { $unwind: { path: "$team", preserveNullAndEmptyArrays: true } },
-    {
-      $lookup: {
-        from: "users",
-        localField: "team.userId",
-        foreignField: "_id",
-        as: "users",
-      },
-    },
-    { $unwind: { path: "$users", preserveNullAndEmptyArrays: true } },
-    { $match: { "users.status": DEFAULT_STATUS.ACTIVE } },
-    {
-      $lookup: {
-        from: "stakes",
-        localField: "userId",
-        foreignField: "userId",
-        as: "stakes",
-      },
-    },
-    { $match: { "stakes.status": DEFAULT_STATUS.ACTIVE } },
-  ]);
-
-  if (teamMembers.length === 0) {
-    await updateProcessedRecords(user, startOfDay);
-    return;
-  }
-
-  // ── Pre-fetch all income levels in one query (avoid N queries in loop) ──
-  const allIncomeLevels = await IncomeLevel.find({}).lean();
-  const getIncomeLevelForMember = (level) =>
-    allIncomeLevels.find(il => il.minLevel <= level && il.maxLevel >= level);
-
-  for (const member of teamMembers) {
-    const memberIncomeLevel = getIncomeLevelForMember(member?.level);
-    const isIncomeLevelExists = referralIncomeUnLockedLevels.find(
-      il => il._id.toString() === memberIncomeLevel?._id?.toString()
+    const referralResult = await referral?.referralIncomeLevel(
+      teamId,
+      user?._id,
+      DEFAULT_STATUS.ACTIVE
     );
 
-    if (!(memberIncomeLevel && isIncomeLevelExists)) {
-      console.log('level is locked for member:', member?.userId);
-      continue;
-    }
+    const incomeLevelBonus = referralResult?.incomeLevelBonus || [];
+    const referralIncomeUnLockedLevels = incomeLevelBonus?.filter(item => item.unlocked);
 
-    if (!member?.stakes?.length) continue;
+    const teamMembers = await TeamMember.aggregate([
+      {
+        $match: { teamId },
+      },
+      {
+        $lookup: {
+          from: "teams",
+          localField: "teamId",
+          foreignField: "_id",
+          as: "team",
+        },
+      },
+      { $unwind: { path: "$team", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "team.userId",
+          foreignField: "_id",
+          as: "users",
+        },
+      },
+      { $unwind: { path: "$users", preserveNullAndEmptyArrays: true } },
+      {
+        $match: {
+          "users.status": DEFAULT_STATUS.ACTIVE,
+        },
+      },
+      {
+        $lookup: {
+          from: "stakes",
+          localField: "userId",
+          foreignField: "userId",
+          as: "stakes",
+        },
+      },
+      {
+        $match: {
+          "stakes.status": DEFAULT_STATUS.ACTIVE,
+        },
+      },
+    ]);
 
-    for (const stake of member.stakes) {
-      // Use the stake's lastReward as the lower bound so we catch the most
-      // recent reward regardless of when exactly the cron fires.
-      const rewardSince = stake?.lastReward
-        ? new Date(stake.lastReward)
-        : new Date(stake.createdAt);
+    if (teamMembers.length > 0) {
+      for (const member of teamMembers) {
+        const memberIncomeLevel = await IncomeLevel.findOne({
+          minLevel: { $lte: member?.level },
+          maxLevel: { $gte: member?.level },
+        });
 
-      const stakeRewardDistribution = await UserStakeReward.findOne({
-        userId: member?.userId,
-        stakeId: stake?._id,
-        createdAt: { $gte: rewardSince },
-      }).sort({ createdAt: -1 }).lean();
+        const isIncomeLevelExists = referralIncomeUnLockedLevels.find((incomeLevel) => incomeLevel?._id.toString() === memberIncomeLevel?._id.toString());
 
-      const stakeRewards = stakeRewardDistribution?.amount || 0;
-      if (!stakeRewards) continue;
+        // if this level is locked, skip this iteration
+        if (!(memberIncomeLevel && isIncomeLevelExists)) {
+          console.log('level is locked')
+          continue;
+        }
 
-      const otherStakeRewardExist = await UserOtherReward.findOne({
-        userId: user._id,
-        stakeId: stake?._id,
-        stakeRewardId: stakeRewardDistribution?._id,
-        type: OTHER_REWARD.INCOME_LEVEL,
-      }).lean();
+        if (member?.stakes?.length > 0) {
+          for (const stake of member.stakes) {
+            // need to modify this
+            const capping = await referral.handleCappingEvent(user?._id);
+            if (capping?.isCappingReached) {
+              console.log('cappingReached');
+              updateProcessedRecords(user, startOfDay);
+              sendCappingLimitEmail(user?.email);
+              break;
+            }
+            
+            const whereClause = { //
+              $gte: startOfDay, // Greater than or equal to start of day
+              $lt: momentFormated() // Less than the next day
+            };
 
-      if (!otherStakeRewardExist) {
-        const incomeRewardAmount = helper.calculatePercentage(
-          isIncomeLevelExists.rewardPercentage,
-          stakeRewards
-        );
+           
+            const stakeRewardDistribution = await UserStakeReward.findOne({
+              userId: member?.userId,
+              stakeId: stake?._id,
+              createdAt: whereClause
+            });
 
-        if (incomeRewardAmount > 0) {
-          await UserOtherReward.create({
-            userId: user._id,
-            type: OTHER_REWARD.INCOME_LEVEL,
-            amount: incomeRewardAmount,
-            stakeId: stake?._id,
-            levelId: isIncomeLevelExists?._id,
-            rewardPercentage: isIncomeLevelExists.rewardPercentage,
-            stakeRewardId: stakeRewardDistribution?._id,
-            createdAt: startOfDay,
-          });
+            // console.log('stakeRewardDistribution', stakeRewardDistribution);
+            const stakeRewards = stakeRewardDistribution ? stakeRewardDistribution?.amount : 0;
+            if (stakeRewards) {
+              const otherStakeRewardExist = await UserOtherReward.findOne({
+                userId: user?._id,
+                stakeId: stake?._id,
+                stakeRewardId: stakeRewardDistribution?._id,
+                type: OTHER_REWARD.INCOME_LEVEL
+              });
+
+              // console.log('otherStakeRewardExist', otherStakeRewardExist);
+              if (!otherStakeRewardExist) {
+                incomeRewardAmount = helper.calculatePercentage(
+                  isIncomeLevelExists.rewardPercentage,
+                  stakeRewards
+                );
+
+                if (incomeRewardAmount > 0) {
+                  await UserOtherReward.create({
+                    userId: user?._id,
+                    type: OTHER_REWARD.INCOME_LEVEL,
+                    amount: incomeRewardAmount,
+                    stakeId: stake?._id,
+                    levelId: isIncomeLevelExists?._id,
+                    rewardPercentage: isIncomeLevelExists.rewardPercentage,
+                    stakeRewardId: stakeRewardDistribution?._id,
+                    createdAt: startOfDay
+                  });
+                }
+              }
+            }
+          }
         }
       }
     }
-  }
 
-  await updateProcessedRecords(user, startOfDay);
+    updateProcessedRecords(user, startOfDay);
+  }
 };
 
 const updateProcessedRecords = async (payload, startOfToday) => {
   await User.updateOne(
     { _id: payload?._id },
-    { $set: { referralProcessedAt: startOfToday } }
+    { referralProcessedAt: startOfToday }
   );
 };
 
