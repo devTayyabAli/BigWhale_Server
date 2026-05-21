@@ -19,8 +19,19 @@ const durationString =
 const cronTiming =
   process.env.APP_ENV !== "production" ? "*/2 * * * *" : "*/15 * * * *";
 
+let isStakeRewardCronRunning = false;
+
 const calcuateStakingRewards = cron.schedule(cronTiming, async () => {
-  stakeRewardCron();
+  if (isStakeRewardCronRunning) {
+    console.log("⏭ stakeRewardCron skipped — previous run still in progress");
+    return;
+  }
+  isStakeRewardCronRunning = true;
+  try {
+    await stakeRewardCron();
+  } finally {
+    isStakeRewardCronRunning = false;
+  }
 });
 
 const stakeRewardCron = async () => {

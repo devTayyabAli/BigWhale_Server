@@ -27,6 +27,13 @@ const userStakeRewardSchema = new mongoose.Schema({
 },
 );
 
+// Prevent the staking cron from inserting duplicate rewards for the same
+// stake on the same day. The index is on (stakeId + date-truncated createdAt).
+// Since createdAt is set to the stake's original time-of-day, two rewards
+// for the same stake on the same calendar day will have the same stakeId
+// and the same createdAt — this index blocks the second insert.
+userStakeRewardSchema.index({ stakeId: 1, createdAt: 1 }, { unique: true });
+
 const UserStakeReward = mongoose.model('UserStakeReward', userStakeRewardSchema);
 
 module.exports = UserStakeReward;

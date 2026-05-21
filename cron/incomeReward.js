@@ -181,11 +181,6 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
   const getIncomeLevelForMember = (level) =>
     allIncomeLevels.find(il => il.minLevel <= level && il.maxLevel >= level);
 
-  const whereClause = {
-    $gte: startOfDay,
-    $lt: momentFormated(),
-  };
-
   for (const member of teamMembers) {
     const memberIncomeLevel = getIncomeLevelForMember(member?.level);
     const isIncomeLevelExists = referralIncomeUnLockedLevels.find(
@@ -200,11 +195,17 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
     if (!member?.stakes?.length) continue;
 
     for (const stake of member.stakes) {
+      // Use the stake's lastReward as the lower bound so we catch the most
+      // recent reward regardless of when exactly the cron fires.
+      const rewardSince = stake?.lastReward
+        ? new Date(stake.lastReward)
+        : new Date(stake.createdAt);
+
       const stakeRewardDistribution = await UserStakeReward.findOne({
         userId: member?.userId,
         stakeId: stake?._id,
-        createdAt: whereClause,
-      }).lean();
+        createdAt: { $gte: rewardSince },
+      }).sort({ createdAt: -1 }).lean();
 
       const stakeRewards = stakeRewardDistribution?.amount || 0;
       if (!stakeRewards) continue;
@@ -244,7 +245,7 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
 const updateProcessedRecords = async (payload, startOfToday) => {
   await User.updateOne(
     { _id: payload?._id },
-    { referralProcessedAt: startOfToday }
+    { $set: { referralProcessedAt: startOfToday } }
   );
 };
 
