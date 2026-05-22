@@ -16,20 +16,20 @@ const Stake = require("../models/stake.model");
 let timeout;
 let retryCount = 0;
 
-const timeString = process.env.APP_ENV == 'production' ? 1 : 24;
-const durationString = process.env.APP_ENV == 'production' ? "hour" : "hour";
-const cronTiming = process.env.APP_ENV == 'production' ? "0 * * * *" : "5 0 * * *";
+const timeString = Number(process.env.INCOME_REWARD_LOOKBACK_DURATION) || 1;
+const durationString = process.env.INCOME_REWARD_LOOKBACK_UNIT || "hour";
+const cronTiming = process.env.INCOME_REWARD_CRON_SCHEDULE || (process.env.APP_ENV == 'production' ? "0 * * * *" : "5 0 * * *");
 const saveIncomeRewardCron = cron.schedule(cronTiming, async () => {
   try {
     console.log("🚀 ~ saveIncomeRewardCron started");
-    await saveIncomeLevelReward(0);
+    await saveIncomeLevelReward();
     console.log("🚀 ~ saveIncomeRewardCron ended");
   } catch (error) {
     console.log("Something went wrong in saveIncomeRewardCron", error?.message);
   }
 });
 
-const saveIncomeLevelReward = async (skip = 0) => {
+const saveIncomeLevelReward = async () => {
   try {
     const startOfDay = momentToSubtract(timeString, durationString);
     console.log('startOfDay', startOfDay);
@@ -43,7 +43,6 @@ const saveIncomeLevelReward = async (skip = 0) => {
         $ne: startOfDay
       }
     })
-      .skip(skip)
       .limit(Number(process.env.BATCH_SIZE_FOR_STAR_RANK));
 
 
@@ -62,10 +61,11 @@ const saveIncomeLevelReward = async (skip = 0) => {
 
         } else {
           console.log(`User ${user._id} does not meet the staking requirement.`);
+          await updateProcessedRecords(user, startOfDay);
         }
       }
-      // Recursively call the function to process the next batch
-      await saveIncomeLevelReward(skip + users.length);
+      // Recursively call the function to process the next batch (offset-free)
+      await saveIncomeLevelReward();
     }
   } catch (error) {
     CronLog.create({
@@ -83,7 +83,7 @@ const saveIncomeLevelReward = async (skip = 0) => {
 
       timeout = setTimeout(async () => {
         console.log("Retrying calculateAndUpdateincomeRewardCron ...");
-        await saveIncomeLevelReward(skip); // Retry with the same skip value
+        await saveIncomeLevelReward(); // Retry with offset-free query
       }, process.env.RETRY_INTERVAL);
     } else {
       console.error(`Maximum retries reached for incomeRewardCron.`);
@@ -171,9 +171,9 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
             const capping = await referral.handleCappingEvent(user?._id);
             if (capping?.isCappingReached) {
               console.log('cappingReached');
-              updateProcessedRecords(user, startOfDay);
-              sendCappingLimitEmail(user?.email);
-              break;
+              await updateProcessedRecords(user, startOfDay);
+              await sendCappingLimitEmail(user?.email);
+              return;
             }
             
             const whereClause = { //
@@ -200,7 +200,7 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
 
               // console.log('otherStakeRewardExist', otherStakeRewardExist);
               if (!otherStakeRewardExist) {
-                incomeRewardAmount = helper.calculatePercentage(
+                const incomeRewardAmount = helper.calculatePercentage(
                   isIncomeLevelExists.rewardPercentage,
                   stakeRewards
                 );
@@ -224,7 +224,7 @@ const upsertDataInUserOtherReward = async (user, startOfDay) => {
       }
     }
 
-    updateProcessedRecords(user, startOfDay);
+    await updateProcessedRecords(user, startOfDay);
   }
 };
 
@@ -238,3 +238,4 @@ const updateProcessedRecords = async (payload, startOfToday) => {
 module.exports = {
   saveIncomeRewardCron
 };
+
