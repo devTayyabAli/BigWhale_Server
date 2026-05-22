@@ -1296,9 +1296,13 @@ try {
       const sc = user.socialConfirmed || {};
 
       // ── Re-verification window ────────────────────────────────────
-      // 24 hours — if user hasn't re-confirmed within this window,
-      // treat them as unverified (they may have left the channel).
-      const RE_VERIFY_WINDOW_MS = 24 * 60 * 60 * 1000;
+      // Configurable via WHATSAPP_RE_VERIFY_HOURS (default: 24h).
+      // If elapsed since last check > window, reset whatsappJoined so
+      // the user must re-confirm on their next withdrawal attempt.
+      // This is the closest approximation to "real-time monitoring"
+      // since WhatsApp has no public channel-membership API.
+      const RE_VERIFY_HOURS     = parseInt(process.env.WHATSAPP_RE_VERIFY_HOURS || "24", 10);
+      const RE_VERIFY_WINDOW_MS = RE_VERIFY_HOURS * 60 * 60 * 1000;
       let whatsappJoined = sc.whatsappJoined || false;
 
       if (whatsappJoined && sc.whatsappLastCheckedAt) {
