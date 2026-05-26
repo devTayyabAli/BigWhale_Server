@@ -50,10 +50,17 @@ const userOtherRewardSchema = new mongoose.Schema(
       required: false,
     },
   },
-  { 
-    timestamps: true, 
-    // collection: "user_other_rewards" 
+  {
+    timestamps: true,
+    // collection: "user_other_rewards"
   }
+);
+
+// Prevent duplicate income-level rewards for the same stakeRewardId per user.
+// sparse: true so leadership/instant-bonus records (no stakeRewardId) are excluded.
+userOtherRewardSchema.index(
+  { userId: 1, stakeRewardId: 1, type: 1 },
+  { unique: true, sparse: true, name: "unique_user_stakeReward_type" }
 );
 
 const UserOtherReward = mongoose.model(

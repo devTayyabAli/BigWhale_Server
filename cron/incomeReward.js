@@ -70,7 +70,7 @@ const saveIncomeLevelReward = async () => {
         const user = users[i];
         processedUserIds.add(user._id.toString()); // mark as processed before DB update
 
-        const stake = await Stake.findOne({ userId: user._id });
+        const stake = await Stake.findOne({ userId: user._id, status: DEFAULT_STATUS.ACTIVE });
 
         if (stake && stake.amount >= 0.055) {
           await upsertDataInUserOtherReward(user, startOfDay, stakeRewardLookback);

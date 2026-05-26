@@ -7,17 +7,11 @@ const Stake = require("../models/stake.model");
 const { sendCappingLimitEmail } = require("../helpers/mail");
 const referral = require("../services/referral");
 const {
-  momentToSubtract,
-  momentFormated,
-  momentFormatedWithSetTime,momentTimezone,
+  momentFormatedWithSetTime,
+  momentTimezone,
 } = require("../helpers/moment");
 const userStakingReward = require("../models/userStakingReward.model");
-const timeString = process.env.STAKE_REWARD_LOOKBACK_DURATION
-  ? Number(process.env.STAKE_REWARD_LOOKBACK_DURATION)
-  : (process.env.APP_ENV !== "production" ? 5 : 5);
-const durationString =
-  process.env.STAKE_REWARD_LOOKBACK_UNIT ||
-  (process.env.APP_ENV !== "production" ? "minutes" : "minutes");
+const { getRewardForDay } = require("../services/stakingReward");
 const cronTiming =
   process.env.STAKE_REWARD_CRON_SCHEDULE || "*/5 * * * *";
 
@@ -27,18 +21,16 @@ const calcuateStakingRewards = cron.schedule(cronTiming, async () => {
 
 const stakeRewardCron = async () => {
   try {
-    const twentyFourHoursAgo = momentToSubtract(timeString, durationString);
+    // Use today's UTC date as the lookback reference so the query returns
+    // all active stakes regardless of when they were last rewarded.
+    const todayUtc = momentTimezone();
 
-    console.log("twentyFourHoursAgo",twentyFourHoursAgo)
     const activeStakes = await services.stakeService.getStakesToAddReward(
-      twentyFourHoursAgo
+      todayUtc
     );
-    console.log("activeStakes",activeStakes)
+    console.log("activeStakes count:", activeStakes.length);
 
     const percentage = await getSettingWithKey(SETTING.STAKE_REWARD_PER_DAY);
-
-    // const userRewardToInsert = [];
-    // const idsToUpdate = [];
 
     for (const stake of activeStakes) {
       if (!stake?.userId?._id) {
@@ -51,61 +43,44 @@ const stakeRewardCron = async () => {
         continue;
       }
 
-      const lastReward =
-        await services.userStakingRewardService.getUserRewardWithinLast24Hrs(
-          stake?._id,
-          twentyFourHoursAgo
-        );
-      const hours = stake?.createdAt.getUTCHours(); // Get the hours (0-23)
-      const minutes = stake?.createdAt.getUTCMinutes(); // Get the minutes (0-59)
-      const seconds = stake?.createdAt.getUTCSeconds(); // Get the seconds (0-59)
-      const milliseconds = stake?.createdAt.getMilliseconds(); // Get the milliseconds (0-999)
-      const time = {
-        hour: hours,
-        minute: minutes,
-        second: seconds,
-        millisecond: milliseconds,
-      };
-      if (!lastReward) {
-        const amount = calculatePercentage(percentage, stake?.amount);
-        //old
-        // userRewardToInsert.push({
-        //   userId: stake?.userId?._id,
-        //   stakeId: stake?._id,
-        //   amount: amount,
-        //   createdAt: momentFormatedWithSetTime(time),
-        // });
-
-        //new
-        await userStakingReward.create({
-          userId: stake?.userId?._id,
-          stakeId: stake?._id,
-          amount: amount,
-          createdAt: momentFormatedWithSetTime(momentTimezone(),time),
-        });
-        
-      
-        //old
-        // idsToUpdate.push(stake?._id);
-
-        //new
-        await Stake.findOneAndUpdate({_id:stake?._id},{lastReward:momentFormatedWithSetTime(momentTimezone(),time)});
+      // Calendar-day duplicate guard (PRODUCTION only):
+      // In production → allow only 1 reward per stake per calendar day.
+      // In non-production (testing) → allow 1 reward per cron run (every hour),
+      //   so you can verify 24 records accumulate in 24 hours.
+      if (process.env.APP_ENV === "production") {
+        const existingTodayReward = await getRewardForDay(stake?._id);
+        if (existingTodayReward) {
+          console.log(`⚠️  Reward already exists for stake ${stake?._id} today – skipping.`);
+          continue;
+        }
       }
+
+      // Set the reward's createdAt to today's date at the stake's original
+      // time-of-day so dashboard grouping lines up with the stake creation time.
+      const time = {
+        hour:        stake?.createdAt.getUTCHours(),
+        minute:      stake?.createdAt.getUTCMinutes(),
+        second:      stake?.createdAt.getUTCSeconds(),
+        millisecond: stake?.createdAt.getMilliseconds(),
+      };
+
+      const amount = calculatePercentage(percentage, stake?.amount);
+
+      await userStakingReward.create({
+        userId:    stake?.userId?._id,
+        stakeId:   stake?._id,
+        amount:    amount,
+        createdAt: momentFormatedWithSetTime(momentTimezone(), time),
+      });
+
+      await Stake.findOneAndUpdate(
+        { _id: stake?._id },
+        { lastReward: momentFormatedWithSetTime(momentTimezone(), time) }
+      );
+
+      console.log(`✅ Reward saved for stake ${stake?._id}, amount: ${amount}`);
     }
-    //old
-    // // console.log("userRewardToInsert", userRewardToInsert);
-    // await services.userStakingRewardService.createUserStakingRewards(
-    //   userRewardToInsert
-    // );
-
-    // await Stake.updateMany(
-    //   {
-    //     _id: { $in: idsToUpdate },
-    //   },
-    //   { lastReward: momentFormated() }
-    // );
-
-    // event to refetch withdrawal amount for all users
+    // Emit event so clients refetch the updated withdrawal amount
     socket.io.emit("withdrawAmount", {});
   } catch (error) {
     console.error("Error while adding stake reward:", error);

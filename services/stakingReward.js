@@ -5,15 +5,31 @@ const createUserStakingRewards = async (payload) => {
   const stakingReward = await userStakingReward.insertMany(payload);
   return stakingReward;
 };
-const getUserRewardWithinLast24Hrs=async (stakeId,twentyFourHoursAgo)=>{
+
+/**
+ * Returns the reward record for a given stake on a specific calendar day.
+ * Uses start-of-day / end-of-day boundaries (UTC) so a cron that fires
+ * multiple times within the same day never inserts a second record.
+ *
+ * @param {ObjectId|string} stakeId
+ * @param {Date|string}     targetDate  – any date whose UTC calendar day we check
+ *                                        (defaults to "today")
+ */
+const getRewardForDay = async (stakeId, targetDate) => {
+  const day = targetDate ? moment.utc(targetDate) : moment.utc();
+  const startOfDay = day.clone().startOf("day").toDate();
+  const endOfDay   = day.clone().endOf("day").toDate();
+
   const reward = await userStakingReward.findOne({
-     stakeId,
-    createdAt: { $gt: twentyFourHoursAgo }
+    stakeId,
+    createdAt: { $gte: startOfDay, $lte: endOfDay },
   });
-  return reward
-}
+  return reward;
+};
 
 module.exports = {
     createUserStakingRewards,
-    getUserRewardWithinLast24Hrs
+    /** @deprecated Use getRewardForDay instead */
+    getUserRewardWithinLast24Hrs: getRewardForDay,
+    getRewardForDay,
 };

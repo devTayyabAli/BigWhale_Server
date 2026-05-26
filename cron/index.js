@@ -10,7 +10,8 @@ const { starRewardDistributionCron } = require("./startRewardDistribution");
 const { saveLeadershipBonusCron } = require("./saveUserRewardDetails");
 const { processParentRankCron } = require("./processMemberParentRank");
 const { addMissingStakeReward } = require("./addMissingStakeReward");
-const {deleteSameDayStakeReward}=require("./deleteSameDayStakeReward")
+const { deleteSameDayStakeReward } = require("./deleteSameDayStakeReward");
+const { saveIncomeRewardCron } = require("./incomeReward");
 const startCronJobs = () => {
   calcuateStakingRewards.start();
   validateStakeExpiration.start();
@@ -24,7 +25,8 @@ const startCronJobs = () => {
   starRewardDistributionCron.start();
   saveLeadershipBonusCron.start();
   processParentRankCron.start();
-  addMissingStakeReward.start()
+  addMissingStakeReward.start();
+  saveIncomeRewardCron.start();
 };
 
 module.exports = startCronJobs;
