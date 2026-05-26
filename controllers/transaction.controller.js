@@ -17,11 +17,17 @@ class KycController {
     );
     const { txHash } = req.params;
     try {
-      await services.stakeService.handleStakeEvent(txHash);
+      const result = await services.stakeService.handleStakeEvent(txHash);
+      if (!result) {
+        response.message = "Transaction or stake not found for the given txHash";
+        return res.status(response.status).json(response);
+      }
       response.message = "tx completed successfully";
       response.status = 200;
       response.success = true;
     } catch (error) {
+      console.error("completeStackTx error:", error);
+      response.message = error?.message || "Something went wrong";
     } finally {
       return res.status(response.status).json(response);
     }

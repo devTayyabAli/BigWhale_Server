@@ -118,31 +118,38 @@ const handleStakeEvent = async (txHash) => {
     { status: TRANSACTION_STATUS.COMPLETED }
   );
 
-  if (transaction) {
-    const stake = await Stake.findOneAndUpdate(
-      { transactionId: transaction?._id },
-      { status: DEFAULT_STATUS.ACTIVE, lastReward: momentFormated() }
-    ).populate("userId");
-
-    if (stake) {
-      // ── Batch fetch setting in one cache read ──────────────────
-      const { getSettingWithKey } = require("../helpers/setting");
-      const instantBonusPercentage = await getSettingWithKey(SETTING.INSTANT_BONUS_PERCENTAGE);
-      const instantReward = helper.calculatePercentage(instantBonusPercentage, stake?.amount);
-
-      if (stake?.userId?.referredBy) {
-        await UserOtherReward.create({
-          userId: stake.userId.referredBy,
-          type: OTHER_REWARD.INSTANT_BONUS,
-          amount: instantReward,
-          stakeId: stake._id,
-          levelId: null,
-          rewardPercentage: instantBonusPercentage,
-        });
-      }
-      socket.io.to(`${stake?.userId?._id}`).emit(CONTRACT_EVENTS.STAKE, {});
-    }
+  if (!transaction) {
+    console.warn(`handleStakeEvent: no transaction found for txHash=${txHash}`);
+    return null;
   }
+
+  const stake = await Stake.findOneAndUpdate(
+    { transactionId: transaction?._id },
+    { status: DEFAULT_STATUS.ACTIVE, lastReward: momentFormated() }
+  ).populate("userId");
+
+  if (!stake) {
+    console.warn(`handleStakeEvent: no stake found for transactionId=${transaction._id}`);
+    return null;
+  }
+
+  // ── Batch fetch setting in one cache read ──────────────────
+  const instantBonusPercentage = await getSettingWithKey(SETTING.INSTANT_BONUS_PERCENTAGE);
+  const instantReward = helper.calculatePercentage(instantBonusPercentage, stake?.amount);
+
+  if (stake?.userId?.referredBy) {
+    await UserOtherReward.create({
+      userId: stake.userId.referredBy,
+      type: OTHER_REWARD.INSTANT_BONUS,
+      amount: instantReward,
+      stakeId: stake._id,
+      levelId: null,
+      rewardPercentage: instantBonusPercentage,
+    });
+  }
+  socket.io.to(`${stake?.userId?._id}`).emit(CONTRACT_EVENTS.STAKE, {});
+
+  return stake;
 };
 
 const updateStake = (query, payload) => {
