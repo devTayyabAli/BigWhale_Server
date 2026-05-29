@@ -15,26 +15,34 @@ const Stake = require("../models/stake.model");
 
 let timeout;
 let retryCount = 0;
+let isIncomeRewardRunning = false;
 
 const timeString = Number(process.env.INCOME_REWARD_LOOKBACK_DURATION) || 6;
 const durationString = process.env.INCOME_REWARD_LOOKBACK_UNIT || "minutes";
 const cronTiming = process.env.INCOME_REWARD_CRON_SCHEDULE || (process.env.APP_ENV == 'production' ? "*/6 * * * *" : "5 0 * * *");
 const saveIncomeRewardCron = cron.schedule(cronTiming, async () => {
+  if (isIncomeRewardRunning) {
+    console.log("⚠️  saveIncomeRewardCron skipped — previous run still in progress.");
+    return;
+  }
+  isIncomeRewardRunning = true;
   try {
     console.log("🚀 ~ saveIncomeRewardCron started");
     await saveIncomeLevelReward();
     console.log("🚀 ~ saveIncomeRewardCron ended");
   } catch (error) {
     console.log("Something went wrong in saveIncomeRewardCron", error?.message);
+  } finally {
+    isIncomeRewardRunning = false;
   }
 });
 
 const saveIncomeLevelReward = async () => {
   // User eligibility lookback — how recently a user was last processed
-  const startOfDay = momentToSubtract(timeString, durationString);
+  const startOfDay = new Date(momentToSubtract(timeString, durationString));
   // Stake reward search window — always look back 24 hours for stake rewards
   // because stake rewards are timestamped at the stake's creation time-of-day
-  const stakeRewardLookback = momentToSubtract(24, 'hours');
+  const stakeRewardLookback = new Date(momentToSubtract(24, 'hours'));
   const processedUserIds = new Set();
   retryCount = 0;
 
@@ -191,16 +199,14 @@ const upsertDataInUserOtherReward = async (user, startOfDay, stakeRewardLookback
               return;
             }
             
-            const whereClause = {
-              $gte: stakeRewardLookback, // look back 24h — no upper bound needed (stakeRewardId check prevents duplicates)
-            };
+            const stakeRewardSince = stakeRewardLookback;
 
-            console.log(`🔍 Looking for stakeRewards: userId=${member?.userId}, stakeId=${stake?._id}, from=${stakeRewardLookback}`);
+            console.log(`🔍 Looking for stakeRewards: userId=${member?.userId}, stakeId=${stake?._id}, from=${stakeRewardSince.toISOString()}`);
            
             const stakeRewardDistributions = await UserStakeReward.find({
               userId: member?.userId,
               stakeId: stake?._id,
-              createdAt: whereClause
+              createdAt: { $gte: stakeRewardSince },
             });
 
             console.log(`🔍 stakeRewardDistributions found: ${stakeRewardDistributions.length}`);

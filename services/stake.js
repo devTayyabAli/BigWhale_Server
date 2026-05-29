@@ -223,18 +223,24 @@ const getActiveStakes = async (startOfToday) => {
   .populate("transactionId");
   return stakes;
 };
-const getStakesToAddReward=async (date)=>{
+const getStakesToAddReward = async (date) => {
+  const now = date ? momentFormated(date) : momentFormated();
   const stakes = await Stake.find({
     status: DEFAULT_STATUS.ACTIVE,
-    lastReward: { $lte: date },
+    endDate: { $gte: now },
+    $or: [
+      { lastReward: null },
+      { lastReward: { $exists: false } },
+      { lastReward: { $lte: now } },
+    ],
   })
-  .populate({
-    path: 'userId',
-    match: { status: DEFAULT_STATUS.ACTIVE } // Filter users based on status
-  })
-  .populate("transactionId");
+    .populate({
+      path: "userId",
+      match: { status: DEFAULT_STATUS.ACTIVE },
+    })
+    .populate("transactionId");
   return stakes;
-}
+};
 const updateExpiredStakes = async () => {
   // const startDate = moment().subtract(1, "day").toDate();
   // const startOfToday = new Date(startDate.setUTCHours(0, 0, 0, 0));

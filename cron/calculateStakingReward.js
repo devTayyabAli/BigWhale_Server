@@ -8,6 +8,7 @@ const { sendCappingLimitEmail } = require("../helpers/mail");
 const referral = require("../services/referral");
 const {
   momentFormatedWithSetTime,
+  momentFormated,
   momentTimezone,
 } = require("../helpers/moment");
 const userStakingReward = require("../models/userStakingReward.model");
@@ -15,8 +16,19 @@ const { getRewardForDay } = require("../services/stakingReward");
 const cronTiming =
   process.env.STAKE_REWARD_CRON_SCHEDULE || "*/5 * * * *";
 
+let isStakeRewardRunning = false;
+
 const calcuateStakingRewards = cron.schedule(cronTiming, async () => {
-  stakeRewardCron();
+  if (isStakeRewardRunning) {
+    console.log("⚠️  stakeRewardCron skipped — previous run still in progress.");
+    return;
+  }
+  isStakeRewardRunning = true;
+  try {
+    await stakeRewardCron();
+  } finally {
+    isStakeRewardRunning = false;
+  }
 });
 
 const stakeRewardCron = async () => {
@@ -43,16 +55,11 @@ const stakeRewardCron = async () => {
         continue;
       }
 
-      // Calendar-day duplicate guard (PRODUCTION only):
-      // In production → allow only 1 reward per stake per calendar day.
-      // In non-production (testing) → allow 1 reward per cron run (every hour),
-      //   so you can verify 24 records accumulate in 24 hours.
-      if (process.env.APP_ENV === "production") {
-        const existingTodayReward = await getRewardForDay(stake?._id);
-        if (existingTodayReward) {
-          console.log(`⚠️  Reward already exists for stake ${stake?._id} today – skipping.`);
-          continue;
-        }
+      // Calendar-day duplicate guard — 1 reward per stake per calendar day.
+      const existingTodayReward = await getRewardForDay(stake?._id);
+      if (existingTodayReward) {
+        console.log(`⚠️  Reward already exists for stake ${stake?._id} today – skipping.`);
+        continue;
       }
 
       // Set the reward's createdAt to today's date at the stake's original
@@ -73,15 +80,17 @@ const stakeRewardCron = async () => {
         createdAt: momentFormatedWithSetTime(momentTimezone(), time),
       });
 
+      // lastReward tracks when the cron last paid — use now so the stake
+      // is not excluded until a future time-of-day on the same day.
       await Stake.findOneAndUpdate(
         { _id: stake?._id },
-        { lastReward: momentFormatedWithSetTime(momentTimezone(), time) }
+        { lastReward: momentFormated() }
       );
 
       console.log(`✅ Reward saved for stake ${stake?._id}, amount: ${amount}`);
     }
     // Emit event so clients refetch the updated withdrawal amount
-    socket.io.emit("withdrawAmount", {});
+    socket.io?.emit("withdrawAmount", {});
   } catch (error) {
     console.error("Error while adding stake reward:", error);
     // Handle errors here
