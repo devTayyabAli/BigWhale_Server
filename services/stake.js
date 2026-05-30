@@ -138,14 +138,28 @@ const handleStakeEvent = async (txHash) => {
   const instantReward = helper.calculatePercentage(instantBonusPercentage, stake?.amount);
 
   if (stake?.userId?.referredBy) {
-    await UserOtherReward.create({
-      userId: stake.userId.referredBy,
-      type: OTHER_REWARD.INSTANT_BONUS,
-      amount: instantReward,
-      stakeId: stake._id,
-      levelId: null,
-      rewardPercentage: instantBonusPercentage,
-    });
+    // Guard against duplicate instant_bonus for the same (upline user, stake).
+    // This can happen if the blockchain event is delivered more than once or if
+    // handleStakeEvent is retried after a partial failure.
+    // updateOne with upsert is atomic — no separate findOne round-trip needed.
+    await UserOtherReward.updateOne(
+      {
+        userId:  stake.userId.referredBy,
+        stakeId: stake._id,
+        type:    OTHER_REWARD.INSTANT_BONUS,
+      },
+      {
+        $setOnInsert: {
+          userId:           stake.userId.referredBy,
+          type:             OTHER_REWARD.INSTANT_BONUS,
+          amount:           instantReward,
+          stakeId:          stake._id,
+          levelId:          null,
+          rewardPercentage: instantBonusPercentage,
+        },
+      },
+      { upsert: true }
+    );
   }
   socket.io.to(`${stake?.userId?._id}`).emit(CONTRACT_EVENTS.STAKE, {});
 
