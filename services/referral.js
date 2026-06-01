@@ -968,7 +968,7 @@ const getStakeBonus = async (userId, page, limit) => {
               stakeId: "$stakeId",
               createdAt: {
                 $dateToString: {
-                  format: "%Y-%m-%d", // Format to group by year-month-day
+                 format: "%Y-%m-%d %H:%M", // Format to group by year-month-day
                   date: "$createdAt",
                 },
               },
@@ -1180,6 +1180,7 @@ const getInstantBonus = async (userId, page, limit) => {
       {
         $replaceRoot: {
           newRoot: {
+               userName: "$user.userName",
             date: "$createdAt",
             package: { $ifNull: ["$stake.amount", null] },
             percent: { $ifNull: ["$level.minimumRewardPercentage", 10] },
