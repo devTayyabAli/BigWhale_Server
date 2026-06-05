@@ -12,14 +12,15 @@ const {
   TRANSACTION_STATUS,
   TRANSACTION_TYPES,
   OTHER_REWARD,
+  SETTING,
 } = require("../config/constants.js");
 const Transaction = require("../models/transaction.model.js");
 const socket = require("../helpers/sockets");
-const { transferFunds, getWithdrawalAmountFromContract } = require("../helpers/web3.js");
+const { transferFunds, getWithdrawalAmountFromContract, getAdminBlnc, stakeTokenOnChain } = require("../helpers/web3.js");
 const PartialWithdrawals = require("../models/partialWithdrawal.model.js");
 const helper = require("../helpers/index");
-const { getAdminBlnc } = require('../helpers/web3');
 const User = require("../models/user.model.js");
+const Stake = require("../models/stake.model.js");
 
 const create = async (req, response) => {
   const { userId, amount } = req.body;
@@ -34,7 +35,7 @@ const create = async (req, response) => {
   const adminBlnc = await getAdminBlnc()
   //**** if there is no staking reward***//
   if (stakingAmount <= 0 && amount > 0) {
-    if (adminBlnc < amount || amount > otherRewardAmountFixed) {
+    if (adminBlnc < amount * 0.5 || amount > otherRewardAmountFixed) {
       response.message = "Something went wrong please try again later";
       response.status = 200;
       response.success = false;
@@ -59,7 +60,7 @@ const create = async (req, response) => {
   ) {
     withdrawalAmountFromContract = amount - partialWithdrawalAmountFixed;
 
-    if (adminBlnc < partialWithdrawalAmountFixed) {
+    if (adminBlnc < partialWithdrawalAmountFixed * 0.5) {
       response.message = "Something went wrong please try again later";
       response.status = 200;
       response.success = false;
@@ -73,7 +74,7 @@ const create = async (req, response) => {
   } else {
     withdrawalAmountFromContract = amount;
   }
-  withdrawal.amount = withdrawalAmountFromContract;
+  withdrawal.amount = withdrawalAmountFromContract * 0.5;
   await withdrawal.save();
   response.success = true;
   response.message = "Withdrawal added successfully";
@@ -81,8 +82,8 @@ const create = async (req, response) => {
   response.data = {
     ...JSON.parse(JSON.stringify(withdrawal)),
     partialWithdrawalAmount:
-      partialWithdrawalAmountFixed > 0 ? partialWithdrawalAmountFixed : 0,
-    withdrawalAmountFromContract,
+      partialWithdrawalAmountFixed > 0 ? partialWithdrawalAmountFixed * 0.5 : 0,
+    withdrawalAmountFromContract: withdrawalAmountFromContract * 0.5,
   };
   return response;
 };
@@ -97,7 +98,7 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
   ).populate("userId");
   const receipt = await withdrawAmount(
     partialWithdrawalAmount?.userId?.walletAddress,
-    partialWithdrawalAmount?.amount,
+    partialWithdrawalAmount?.amount * 0.5,
     partialWithdrawalAmount?.userId?._id,
     partialWithdrawalAmount?._id
   );
@@ -199,13 +200,26 @@ const handleWithdrawalEvent = async (txHash) => {
 
 
     if (withdrawal) {
+      // Reinvestment stake for the contract withdrawal
+      const originalContractAmount = withdrawal.amount * 2;
+      const reinvestAmount = Number((originalContractAmount * 0.3).toFixed(8));
+      if (reinvestAmount > 0) {
+        const user = await User.findById(withdrawal.userId);
+        if (user && user.walletAddress) {
+          const stake = await createReinvestmentStakePending(withdrawal.userId, reinvestAmount);
+          stakeTokenOnChain(user.walletAddress, reinvestAmount, withdrawal.userId, stake._id).catch(err => {
+            console.error("Reinvestment on-chain transaction failed:", err);
+          });
+        }
+      }
+
       const partialWithdrawalAmount = await PartialWithdrawal.findOne({
         withdrawalId: withdrawal?._id,
       }).populate("userId");
       if (partialWithdrawalAmount) {
         const receipt = await withdrawAmount(
           partialWithdrawalAmount?.userId?.walletAddress,
-          partialWithdrawalAmount?.amount,
+          partialWithdrawalAmount?.amount * 0.5,
           partialWithdrawalAmount?.userId?._id,
           partialWithdrawalAmount?._id
         );
@@ -257,7 +271,7 @@ const calculateTotalWithdrawalAmount = async (_id) => {
   ]);
 
   const withdrawalAmountToDeduct =
-    (withdrawalAmountArr[0]?.totalAmount || 0) +
+    ((withdrawalAmountArr[0]?.totalAmount || 0) * 2) +
     (partialWithdrawalAmountArr[0]?.totalAmount || 0);
 
   const totalBonus = helper.convertNegativeToZero(
@@ -267,7 +281,7 @@ const calculateTotalWithdrawalAmount = async (_id) => {
     totalBonus - withdrawalAmountToDeduct
   );
   const stakingAmount = helper.convertNegativeToZero(
-    (stakingRewardBonus + instantRewardBonus) - (withdrawalAmountArr[0]?.totalAmount || 0)
+    (stakingRewardBonus + instantRewardBonus) - ((withdrawalAmountArr[0]?.totalAmount || 0) * 2)
   );
   const otherRewardAmount = helper.convertNegativeToZero(
     leadershipBonus + referralLevelBonus - (partialWithdrawalAmountArr[0]?.totalAmount || 0)
@@ -486,6 +500,19 @@ const updatePartialWithdrawal = async (txHash) => {
       { status: DEFAULT_STATUS.ACTIVE }
     );
     if (partialWithdrawal) {
+      // Reinvestment stake for partial withdrawal
+      const originalPartialAmount = partialWithdrawal.amount;
+      const reinvestAmount = Number((originalPartialAmount * 0.3).toFixed(8));
+      if (reinvestAmount > 0) {
+        const user = await User.findById(partialWithdrawal.userId);
+        if (user && user.walletAddress) {
+          const stake = await createReinvestmentStakePending(partialWithdrawal.userId, reinvestAmount);
+          stakeTokenOnChain(user.walletAddress, reinvestAmount, partialWithdrawal.userId, stake._id).catch(err => {
+            console.error("Reinvestment on-chain transaction failed for partial withdrawal:", err);
+          });
+        }
+      }
+
       socket.io
         .to(`${partialWithdrawal?.userId}`)
         .emit(CONTRACT_EVENTS.WITHDRAWAL, {});
@@ -556,7 +583,7 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
 
       return {
         ...withdrawal,
-        amount: (withdrawal.amount || 0) + partialSum, // total amount
+        amount: ((withdrawal.amount || 0) * 2) + partialSum, // total amount
         partialWithdrawals: partials,
       };
     });
@@ -578,6 +605,29 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
   }
 };
 
+
+const createReinvestmentStakePending = async (userId, amount) => {
+  const { getSettingsWithKeys } = require("../helpers/setting");
+  const settings = await getSettingsWithKeys([
+    SETTING.STAKE_DURATION,
+    SETTING.STAKE_REWARD_PER_DAY,
+    SETTING.STAKE_DURATION_UNIT,
+  ]);
+  const stakeDurationDays = settings[SETTING.STAKE_DURATION];
+  const stakeRewardPerDay = settings[SETTING.STAKE_REWARD_PER_DAY];
+  const stakeDurationUnit = settings[SETTING.STAKE_DURATION_UNIT];
+
+  const { momentToAdd, momentFormated } = require("../helpers/moment");
+
+  return await Stake.create({
+    userId,
+    amount,
+    status: DEFAULT_STATUS.PENDING,
+    endDate: momentToAdd(stakeDurationDays, stakeDurationUnit),
+    rewardPercentage: stakeRewardPerDay,
+    lastReward: momentFormated(),
+  });
+};
 
 module.exports = {
   create,

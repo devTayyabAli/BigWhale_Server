@@ -4,6 +4,8 @@ const { TRANSACTION_TYPES } = require("../config/constants");
 const axios = require("axios");
 const Transaction = require("../models/transaction.model");
 const PartialWithdrawals = require("../models/partialWithdrawal.model");
+const Stake = require("../models/stake.model");
+const { TRANSACTION_STATUS } = require("../config/constants");
 const getWeb3 = () => {
   const provider = process.env.CHAIN_STACK_HTTP_URL;
   const web3 = new Web3(provider);
@@ -128,10 +130,56 @@ const getWithdrawalAmountFromContract=async(userAddress)=>{
     blnc = web3.utils.fromWei(`${blnc?.withdrawedAmount}`, "ether");
     return blnc>0?truncateDecimals(Number(blnc),8):Number(blnc)|| 0
 }
+const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
+  try {
+    const web3 = await getWeb3();
+    const { abi, address } = CONTRACT_DETAILS.staking;
+    const methods = await getContractMethods(abi, address);
+    const stakeFunc = methods.stakeTokenByOwner(
+      userAddress,
+      web3.utils.toWei(`${Number(Number(amount)?.toFixed(8))}`, "ether")
+    );
+
+    const gasPrice = await web3.eth.getGasPrice();
+    const funcData = stakeFunc.encodeABI();
+    const rawTransaction = {
+      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+      gasPrice: web3.utils.toHex(gasPrice),
+      gasLimit: web3.utils.toHex(900000),
+      to: address,
+      data: funcData,
+    };
+    const signTransaction = await web3.eth.accounts.signTransaction(
+      rawTransaction,
+      process.env.KGC_TOKENS_PRIVATE_KEY
+    );
+    const receipt = await web3.eth
+      .sendSignedTransaction(signTransaction.rawTransaction)
+      .on("transactionHash", async (txHash) => {
+        const tx = await Transaction.create({
+          userId,
+          txHash,
+          type: "staking",
+          fiatAmount: 0,
+          cryptoAmount: Number(amount),
+          status: TRANSACTION_STATUS.PENDING,
+        });
+        await Stake.findByIdAndUpdate(
+          stakeId,
+          { transactionId: tx?._id }
+        );
+      });
+    return receipt;
+  } catch (err) {
+    console.error("Error in stakeTokenOnChain helper:", err);
+  }
+};
+
 module.exports = {
   transferFunds,
   getUSDCLivePrice,
   getAdminBlnc,
   getWithdrawalAmountFromContract,
-  truncateDecimals
+  truncateDecimals,
+  stakeTokenOnChain
 };

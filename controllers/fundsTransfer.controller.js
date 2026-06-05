@@ -122,7 +122,7 @@ class FundsTransferController {
 
       const partialWithdrawalAmount = await totalPartialWithdrawalAmount(objectIdUserId)
       const withdrawalAmount = await totalWithdrawalAmount(objectIdUserId);
-      const withdrawalAmountToDeduct = (withdrawalAmount[0]?.totalAmount || 0) + (partialWithdrawalAmount[0]?.totalAmount || 0)
+      const withdrawalAmountToDeduct = ((withdrawalAmount[0]?.totalAmount || 0) * 2) + (partialWithdrawalAmount[0]?.totalAmount || 0)
       // console.log("withdrawalAmountToDeduct",withdrawalAmountToDeduct)
       // Aggregate the total sell amount
       const [registerAmount,] = await Promise.all([
