@@ -465,6 +465,20 @@ const getInstantBonus = async (request, response) => {
   } catch (error) {
     return response.status(HTTP_STATUS_CODE.INTERNAL_SERVER).json(error);
   }
+};
+
+const getSalaryRankHistory = async (request, response) => {
+  try {
+    const { _id } = request.user;
+    const { page, limit } = request.query;
+    const { rewards, total } = await referral.getSalaryRankHistory(_id, page, limit);
+    return response.status(HTTP_STATUS_CODE.OK).json({
+      data: rewards,
+      paginate: createPaginator.paginate(total, limit, page),
+    });
+  } catch (error) {
+    return response.status(HTTP_STATUS_CODE.INTERNAL_SERVER).json(error);
+  }
 }
 module.exports = {
   getReferralByType,
@@ -475,5 +489,6 @@ module.exports = {
   getLeadershipBonus,
   getStakeBonus,
   getLevelBonus,
-  getInstantBonus
+  getInstantBonus,
+  getSalaryRankHistory
 };

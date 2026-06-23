@@ -15,37 +15,50 @@ const getStakeRankDetails = async (req, response) => {
   const allRank = [];
   const systemRanks = await Rank.find({});
   const userDetails = await getUserDetailsForBonus(userId);
-  const userObject = userDetails[0];
   const rankDetail = await processDataForRankDetails(userDetails, currentDate);
+  const userObject = rankDetail[0]?.users || userDetails[0];
   const rankObject = rankDetail[0]?.rank;
 
-  const qualification = userObject?.qualifications.find((value) =>
-    new ObjectId(value?.id).equals(rankObject?.rankId)
+  const qualification = userObject?.qualifications?.find((value) =>
+    rankObject?.rankId && new ObjectId(value?.id).equals(rankObject?.rankId)
   );
 
   for (let rank of systemRanks) {
     let dataObject = {
       title: rank.title,
       selfBusiness: {
-        value: userObject?.stakes?.amount,
-        status: userObject?.stakes?.amount >= rank.selfBusiness ? true : false,
+        value: userObject?.stakes?.amount || 0,
+        status: (userObject?.stakes?.amount || 0) >= rank.selfBusiness ? true : false,
         requiredValue: rank?.selfBusiness,
       },
-     
       directBussiness: {
-        value: userObject?.directBussiness,
-        status:
-          userObject?.directBussiness >= rank.directBussiness ? true : false,
+        value: userObject?.directBussiness || 0,
+        status: (userObject?.directBussiness || 0) >= rank.directBussiness ? true : false,
         requiredValue: rank?.directBussiness,
+      },
+      directTeam: {
+        value: userObject?.directTeamCount || 0,
+        status: (userObject?.directTeamCount || 0) >= rank.directTeam ? true : false,
+        requiredValue: rank?.directTeam,
+      },
+      totalTeamBusiness: {
+        value: userObject?.totalTeamBusiness || 0,
+        status: (userObject?.totalTeamBusiness || 0) >= rank.totalTeamBusiness ? true : false,
+        requiredValue: rank?.totalTeamBusiness,
+      },
+      totalTeamSize: {
+        value: userObject?.teamSize || 0,
+        status: (userObject?.teamSize || 0) >= rank.totalTeamSize ? true : false,
+        requiredValue: rank?.totalTeamSize,
       }
     };
 
     dataObject.qualification = {
       value:
-        qualification && rank?._id.equals(rankObject._id)
+        qualification && rank?._id.equals(rankObject?._id)
           ? qualification?.count
           : 0,
-      status: qualification && rank?._id.equals(rankObject._id) ? true : false,
+      status: qualification && rank?._id.equals(rankObject?._id) ? true : false,
       requiredValue: rank?.referralCount,
     };
 

@@ -1192,6 +1192,63 @@ const getGlobalTurnover = async (request, response) => {
     return response.status(500).json({ success: false, message: err.message });
   }
 };
+
+/**
+ * Salary Rank History for Admin
+ * GET /admin/salary-rank-history?page&limit&startDate&endDate&userName
+ */
+const getSalaryRankHistory = async (request, response) => {
+  try {
+    const { page = 1, limit = 10, startDate, endDate, userName } = request.query;
+    const skip = (page - 1) * limit;
+    const matchQuery = { type: OTHER_REWARD.SALARY_RANK };
+
+    if (startDate && endDate) {
+      matchQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    }
+
+    if (userName) {
+      const matchedUsers = await User.find({
+        $or: [
+          { userName: { $regex: userName, $options: 'i' } },
+          { email: { $regex: userName, $options: 'i' } },
+          { walletAddress: { $regex: userName, $options: 'i' } },
+        ]
+      }).select('_id').lean();
+
+      const userIds = matchedUsers.map(u => u._id);
+      matchQuery.userId = { $in: userIds };
+    }
+
+    const [data, totalCount, agg] = await Promise.all([
+      UserOtherReward.find(matchQuery)
+        .populate('userId', 'name userName email walletAddress')
+        .populate('rankId', 'title starKey')
+        .sort({ createdAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean(),
+      UserOtherReward.countDocuments(matchQuery),
+      UserOtherReward.aggregate([
+        { $match: matchQuery },
+        { $group: { _id: null, total: { $sum: { $toDouble: '$amount' } } } }
+      ]),
+    ]);
+
+    return response.status(200).json({
+      success: true,
+      message: 'Salary rank history fetched successfully.',
+      data,
+      totalAmount: agg[0]?.total || 0,
+      totalCount,
+      paginate: createPaginator.paginate(totalCount, limit, page),
+    });
+  } catch (err) {
+    console.error('getSalaryRankHistory error:', err);
+    return response.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const getOtherReward = async (req, response) => {
   try {
     const {
@@ -1490,4 +1547,5 @@ module.exports = {
   getCashInflow,
   getCashOutflow,
   getGlobalTurnover,
+  getSalaryRankHistory,
 };

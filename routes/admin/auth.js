@@ -33,6 +33,7 @@ router.get("/today-banned-users", adminMiddleware, UserController.getTodayBanned
 router.get("/cash-inflow", adminMiddleware, UserController.getCashInflow);
 router.get("/cash-outflow", adminMiddleware, UserController.getCashOutflow);
 router.get("/global-turnover", adminMiddleware, UserController.getGlobalTurnover);
+router.get("/salary-rank-history", adminMiddleware, UserController.getSalaryRankHistory);
 
 
 router.get("/other-reward", adminMiddleware, UserController.getOtherReward);

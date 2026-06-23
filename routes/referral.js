@@ -24,4 +24,6 @@ router.get('/level-bonus', checkIfAuthenticated, ReferralController.getLevelBonu
 
 router.get('/instant-bonus', checkIfAuthenticated, ReferralController.getInstantBonus);
 
+router.get('/salary-rank-history', checkIfAuthenticated, ReferralController.getSalaryRankHistory);
+
 module.exports = router;

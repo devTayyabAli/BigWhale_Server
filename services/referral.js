@@ -1214,6 +1214,74 @@ const getInstantBonus = async (userId, page, limit) => {
     return err;
   }
 };
+
+const getSalaryRankHistory = async (userId, page, limit) => {
+  try {
+    const skip = (page - 1) * limit;
+    const limitValue = parseInt(limit);
+
+    const total = await UserOtherReward.countDocuments({
+      userId: new ObjectId(userId),
+      type: OTHER_REWARD.SALARY_RANK,
+    });
+
+    const rewardsData = await UserOtherReward.aggregate([
+      {
+        $match: {
+          userId: new ObjectId(userId),
+          type: OTHER_REWARD.SALARY_RANK,
+        },
+      },
+      {
+        $lookup: {
+          from: "ranks",
+          localField: "rankId",
+          foreignField: "_id",
+          as: "rank",
+        },
+      },
+      { $unwind: { path: "$rank", preserveNullAndEmptyArrays: true } },
+      {
+        $replaceRoot: {
+          newRoot: {
+            date: "$createdAt",
+            rankTitle: { $ifNull: ["$rank.title", "—"] },
+            starKey: { $ifNull: ["$rank.starKey", 0] },
+            rewardPercentage: { $ifNull: ["$rewardPercentage", 0] },
+            amount: { $ifNull: ["$amount", 0] },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          salaryRankData: { $push: "$$ROOT" },
+          totalAmount: { $sum: { $toDouble: "$amount" } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          totalAmount: 1,
+          salaryRankData: {
+            $slice: [
+              { $sortArray: { input: "$salaryRankData", sortBy: { date: -1 } } },
+              skip,
+              limitValue,
+            ],
+          },
+        },
+      },
+    ]);
+
+    const rewards = rewardsData.length > 0 ? rewardsData[0] : { salaryRankData: [], totalAmount: 0 };
+    return { total, rewards };
+  } catch (err) {
+    console.log(err);
+    return err;
+  }
+};
+
 const stakingRewardAmount = async (userId, startDate = null, endDate = null) => {
   try {
     const matchQuery = { userId };
@@ -1554,6 +1622,7 @@ module.exports = {
   getStakeBonus,
   getLevelBonus,
   getInstantBonus,
+  getSalaryRankHistory,
   stakingRewardAmount,
   referralLevelAmount,
   getStakeExpiry,
