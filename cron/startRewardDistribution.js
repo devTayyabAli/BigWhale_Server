@@ -12,16 +12,26 @@ const { sendCronFailureEmail } = require("../helpers/mail");
 let timeout;
 let retryCount = 0;
 
-const starRewardDistributionCron = cron.schedule("20 0 * * *", async () => {
-  try {
-    await distributeStarReward();
-  } catch (error) {
-    console.log(
-      "Something went wrong in starRewardDistribution",
-      error?.message
-    );
-  }
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  DEACTIVATED — Salary Rank system now distributes per-withdrawal instead
+//     of from global turnover. This cron is kept for historical reference and
+//     manual backfill if ever needed. Do NOT delete.
+//
+// const starRewardDistributionCron = cron.schedule("20 0 * * *", async () => {
+//   try {
+//     await distributeStarReward();
+//   } catch (error) {
+//     console.log(
+//       "Something went wrong in starRewardDistribution",
+//       error?.message
+//     );
+//   }
+// });
+// ─────────────────────────────────────────────────────────────────────────────
+
+// No-op shim so any code that calls .start() or .stop() on this export doesn't crash
+const starRewardDistributionCron = { start: () => {}, stop: () => {} };
+
 
 const distributeStarReward = async () => {
   try {

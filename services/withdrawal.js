@@ -21,6 +21,7 @@ const PartialWithdrawals = require("../models/partialWithdrawal.model.js");
 const helper = require("../helpers/index");
 const User = require("../models/user.model.js");
 const Stake = require("../models/stake.model.js");
+const salaryRankService = require("./salaryRank");
 
 const create = async (req, response) => {
   const { userId, amount } = req.body;
@@ -31,11 +32,12 @@ const create = async (req, response) => {
   let withdrawalAmountFromContract = 0;
   const withdrawal = new Withdrawal({
     userId,
+    payoutPercentage: 80,
   });
   const adminBlnc = await getAdminBlnc()
   //**** if there is no staking reward***//
   if (stakingAmount <= 0 && amount > 0) {
-    if (adminBlnc < amount * 0.5 || amount > otherRewardAmountFixed) {
+    if (adminBlnc < amount * 0.8 || amount > otherRewardAmountFixed) {
       response.message = "Something went wrong please try again later";
       response.status = 200;
       response.success = false;
@@ -60,7 +62,7 @@ const create = async (req, response) => {
   ) {
     withdrawalAmountFromContract = amount - partialWithdrawalAmountFixed;
 
-    if (adminBlnc < partialWithdrawalAmountFixed * 0.5) {
+    if (adminBlnc < partialWithdrawalAmountFixed * 0.8) {
       response.message = "Something went wrong please try again later";
       response.status = 200;
       response.success = false;
@@ -74,7 +76,7 @@ const create = async (req, response) => {
   } else {
     withdrawalAmountFromContract = amount;
   }
-  withdrawal.amount = withdrawalAmountFromContract * 0.5;
+  withdrawal.amount = withdrawalAmountFromContract * 0.8;
   await withdrawal.save();
   response.success = true;
   response.message = "Withdrawal added successfully";
@@ -82,8 +84,8 @@ const create = async (req, response) => {
   response.data = {
     ...JSON.parse(JSON.stringify(withdrawal)),
     partialWithdrawalAmount:
-      partialWithdrawalAmountFixed > 0 ? partialWithdrawalAmountFixed * 0.5 : 0,
-    withdrawalAmountFromContract: withdrawalAmountFromContract * 0.5,
+      partialWithdrawalAmountFixed > 0 ? partialWithdrawalAmountFixed * 0.8 : 0,
+    withdrawalAmountFromContract: withdrawalAmountFromContract * 0.8,
   };
   return response;
 };
@@ -98,7 +100,7 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
   ).populate("userId");
   const receipt = await withdrawAmount(
     partialWithdrawalAmount?.userId?.walletAddress,
-    partialWithdrawalAmount?.amount * 0.5,
+    partialWithdrawalAmount?.amount * 0.8,
     partialWithdrawalAmount?.userId?._id,
     partialWithdrawalAmount?._id
   );
@@ -200,16 +202,28 @@ const handleWithdrawalEvent = async (txHash) => {
 
 
     if (withdrawal) {
-      // Reinvestment stake for the contract withdrawal
-      const originalContractAmount = withdrawal.amount * 2;
-      const reinvestAmount = Number((originalContractAmount * 0.3).toFixed(8));
-      if (reinvestAmount > 0) {
-        const user = await User.findById(withdrawal.userId);
-        if (user && user.walletAddress) {
-          const stake = await createReinvestmentStakePending(withdrawal.userId, reinvestAmount);
-          stakeTokenOnChain(user.walletAddress, reinvestAmount, withdrawal.userId, stake._id).catch(err => {
-            console.error("Reinvestment on-chain transaction failed:", err);
-          });
+      const payoutPct = withdrawal.payoutPercentage || 50;
+      const payoutRatio = payoutPct / 100;
+
+      // ── Salary Rank distribution (20% of total withdrawal) ─────────────
+      // The full withdrawal amount before the split = amount / payoutRatio
+      const totalWithdrawalForSalary = withdrawal.amount / payoutRatio;
+      salaryRankService.distributeSalaryRankReward(totalWithdrawalForSalary).catch((err) =>
+        console.error("Salary rank distribution failed (contract withdrawal):", err?.message)
+      );
+
+      // Reinvestment stake is ONLY done for legacy 50% withdrawals
+      if (payoutPct === 50) {
+        const originalContractAmount = withdrawal.amount * 2;
+        const reinvestAmount = Number((originalContractAmount * 0.3).toFixed(8));
+        if (reinvestAmount > 0) {
+          const user = await User.findById(withdrawal.userId);
+          if (user && user.walletAddress) {
+            const stake = await createReinvestmentStakePending(withdrawal.userId, reinvestAmount);
+            stakeTokenOnChain(user.walletAddress, reinvestAmount, withdrawal.userId, stake._id).catch(err => {
+              console.error("Reinvestment on-chain transaction failed:", err);
+            });
+          }
         }
       }
 
@@ -219,7 +233,7 @@ const handleWithdrawalEvent = async (txHash) => {
       if (partialWithdrawalAmount) {
         const receipt = await withdrawAmount(
           partialWithdrawalAmount?.userId?.walletAddress,
-          partialWithdrawalAmount?.amount * 0.5,
+          partialWithdrawalAmount?.amount * payoutRatio,
           partialWithdrawalAmount?.userId?._id,
           partialWithdrawalAmount?._id
         );
@@ -251,40 +265,52 @@ const getWithdrawalAmount = async (req, response) => {
 };
 
 const calculateTotalWithdrawalAmount = async (_id) => {
-  // ── Run all 5 reward queries in parallel instead of sequentially ──
-  // Before: ~5 sequential DB round-trips
-  // After:  1 parallel batch — ~5x faster
+  // ── Run all reward queries in parallel ──────────────────────────────────
+  // salaryRankBonus: rewards earned as a salary rank holder from community withdrawals
   const [
     stakingRewardBonus,
     referralLevelBonus,
     leadershipBonus,
     instantRewardBonus,
+    salaryRankBonus,
     partialWithdrawalAmountArr,
     withdrawalAmountArr,
+    newWithdrawals,
   ] = await Promise.all([
     referral.stakingRewardAmount(_id),
     referral.referralLevelAmount(_id, OTHER_REWARD.INCOME_LEVEL),
     referral.referralLevelAmount(_id, OTHER_REWARD.LEADERSHIP),
     referral.referralLevelAmount(_id, OTHER_REWARD.INSTANT_BONUS),
+    referral.referralLevelAmount(_id, OTHER_REWARD.SALARY_RANK),
     totalPartialWithdrawalAmount(_id),
     totalWithdrawalAmount(_id),
+    Withdrawal.find({
+      userId: _id,
+      status: DEFAULT_STATUS.ACTIVE,
+      payoutPercentage: 80,
+    }).lean(),
   ]);
 
+  const totalNewNet = newWithdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
+  const contractNet = withdrawalAmountArr[0]?.totalAmount || 0;
+  const legacyNet = Math.max(0, contractNet - totalNewNet);
+  const grossContractAmount = (legacyNet * 2) + (totalNewNet / 0.8);
+
   const withdrawalAmountToDeduct =
-    ((withdrawalAmountArr[0]?.totalAmount || 0) * 2) +
+    grossContractAmount +
     (partialWithdrawalAmountArr[0]?.totalAmount || 0);
 
   const totalBonus = helper.convertNegativeToZero(
-    stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus
+    stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus + salaryRankBonus
   );
   const availableBonusBalance = helper.convertNegativeToZero(
     totalBonus - withdrawalAmountToDeduct
   );
   const stakingAmount = helper.convertNegativeToZero(
-    (stakingRewardBonus + instantRewardBonus) - ((withdrawalAmountArr[0]?.totalAmount || 0) * 2)
+    (stakingRewardBonus + instantRewardBonus) - grossContractAmount
   );
   const otherRewardAmount = helper.convertNegativeToZero(
-    leadershipBonus + referralLevelBonus - (partialWithdrawalAmountArr[0]?.totalAmount || 0)
+    leadershipBonus + referralLevelBonus + salaryRankBonus - (partialWithdrawalAmountArr[0]?.totalAmount || 0)
   );
   const combinedTotalAmount = helper.convertNegativeToZero(availableBonusBalance);
 
@@ -296,6 +322,7 @@ const calculateTotalWithdrawalAmount = async (_id) => {
     referralLevelBonus,
     leadershipBonus,
     instantRewardBonus,
+    salaryRankBonus,
     withdrawalAmount: withdrawalAmountToDeduct,
     totalBonus,
     availableBonusBalance: Number(combinedTotalAmount),
@@ -498,18 +525,26 @@ const updatePartialWithdrawal = async (txHash) => {
         transactionId: tx?._id,
       },
       { status: DEFAULT_STATUS.ACTIVE }
-    );
+    ).populate("withdrawalId");
     if (partialWithdrawal) {
-      // Reinvestment stake for partial withdrawal
-      const originalPartialAmount = partialWithdrawal.amount;
-      const reinvestAmount = Number((originalPartialAmount * 0.3).toFixed(8));
-      if (reinvestAmount > 0) {
-        const user = await User.findById(partialWithdrawal.userId);
-        if (user && user.walletAddress) {
-          const stake = await createReinvestmentStakePending(partialWithdrawal.userId, reinvestAmount);
-          stakeTokenOnChain(user.walletAddress, reinvestAmount, partialWithdrawal.userId, stake._id).catch(err => {
-            console.error("Reinvestment on-chain transaction failed for partial withdrawal:", err);
-          });
+      // ── Salary Rank distribution (partial withdrawal) ───────────────────
+      salaryRankService.distributeSalaryRankReward(partialWithdrawal.amount).catch((err) =>
+        console.error("Salary rank distribution failed (partial withdrawal):", err?.message)
+      );
+
+      // Reinvestment stake for partial withdrawal is ONLY done for legacy 50% withdrawals
+      const payoutPct = partialWithdrawal.withdrawalId?.payoutPercentage || 50;
+      if (payoutPct === 50) {
+        const originalPartialAmount = partialWithdrawal.amount;
+        const reinvestAmount = Number((originalPartialAmount * 0.3).toFixed(8));
+        if (reinvestAmount > 0) {
+          const user = await User.findById(partialWithdrawal.userId);
+          if (user && user.walletAddress) {
+            const stake = await createReinvestmentStakePending(partialWithdrawal.userId, reinvestAmount);
+            stakeTokenOnChain(user.walletAddress, reinvestAmount, partialWithdrawal.userId, stake._id).catch(err => {
+              console.error("Reinvestment on-chain transaction failed for partial withdrawal:", err);
+            });
+          }
         }
       }
 
@@ -581,9 +616,12 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
         0
       );
 
+      const pct = withdrawal.payoutPercentage || 50;
+      const ratio = pct / 100;
+
       return {
         ...withdrawal,
-        amount: ((withdrawal.amount || 0) * 2) + partialSum, // total amount
+        amount: ((withdrawal.amount || 0) / ratio) + partialSum, // total amount
         partialWithdrawals: partials,
       };
     });

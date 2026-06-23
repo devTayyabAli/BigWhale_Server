@@ -33,7 +33,7 @@
     },
     {
         "inputs": [],
-        "name": "FailedCall",
+        "name": "FailedInnerCall",
         "type": "error"
     },
     {
@@ -183,19 +183,6 @@
         "inputs": [
             {
                 "indexed": false,
-                "internalType": "uint256",
-                "name": "_directReferral",
-                "type": "uint256"
-            }
-        ],
-        "name": "DirectReferralChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
                 "internalType": "uint64",
                 "name": "version",
                 "type": "uint64"
@@ -227,32 +214,6 @@
         "anonymous": false,
         "inputs": [
             {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_perDayPercentage",
-                "type": "uint256"
-            }
-        ],
-        "name": "PerDayPercentageChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_referalFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "ReferalFeeChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
                 "indexed": true,
                 "internalType": "address",
                 "name": "regissteredUser",
@@ -272,45 +233,6 @@
             }
         ],
         "name": "Register",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_registerationFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "RegistrationFeeChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_rewardFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "RewardFeeChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_rewardTimeUnit",
-                "type": "uint256"
-            }
-        ],
-        "name": "RewardTimeUnitChanged",
         "type": "event"
     },
     {
@@ -342,32 +264,6 @@
             }
         ],
         "name": "Stake",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_stakingDuration",
-                "type": "uint256"
-            }
-        ],
-        "name": "StakingDurationChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_stakingFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "StakingFeeChanged",
         "type": "event"
     },
     {
@@ -431,32 +327,6 @@
             }
         ],
         "name": "Withdraw",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_withdrawFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "WithdrawFeeChanged",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_withdrawalDeduction",
-                "type": "uint256"
-            }
-        ],
-        "name": "WithdrawalDeductionChanged",
         "type": "event"
     },
     {
@@ -603,85 +473,7 @@
                 "type": "uint256"
             }
         ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_directReferral",
-                "type": "uint256"
-            }
-        ],
-        "name": "changeDirectReferral",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_perDayPercentage",
-                "type": "uint256"
-            }
-        ],
-        "name": "changePerDayPercentage",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_registrationFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "changeRegistrationFee",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_rewardTimeUnit",
-                "type": "uint256"
-            }
-        ],
-        "name": "changeRewardTimeUnit",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_stakingDuration",
-                "type": "uint256"
-            }
-        ],
-        "name": "changeStakingDuration",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_withdrawalDeduction",
-                "type": "uint256"
-            }
-        ],
-        "name": "changeWithdrawalDeduction",
-        "outputs": [],
-        "stateMutability": "nonpayable",
+        "stateMutability": "pure",
         "type": "function"
     },
     {
@@ -787,53 +579,6 @@
         "type": "function"
     },
     {
-        "inputs": [],
-        "name": "getStakingDays",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "address",
-                "name": "user",
-                "type": "address"
-            }
-        ],
-        "name": "getUserInfo",
-        "outputs": [
-            {
-                "internalType": "bool",
-                "name": "registered",
-                "type": "bool"
-            },
-            {
-                "internalType": "uint256",
-                "name": "totalStaked",
-                "type": "uint256"
-            },
-            {
-                "internalType": "uint256",
-                "name": "totalReward",
-                "type": "uint256"
-            },
-            {
-                "internalType": "uint256",
-                "name": "withdrawed",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
         "inputs": [
             {
                 "internalType": "address",
@@ -922,30 +667,6 @@
         "type": "function"
     },
     {
-        "inputs": [
-            {
-                "internalType": "address",
-                "name": "user",
-                "type": "address"
-            },
-            {
-                "internalType": "uint256",
-                "name": "stakeId",
-                "type": "uint256"
-            }
-        ],
-        "name": "pendingReward",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
         "inputs": [],
         "name": "proxiableUUID",
         "outputs": [
@@ -994,19 +715,6 @@
         "name": "renounceOwnership",
         "outputs": [],
         "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "rewardTimeUnit",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -1170,19 +878,6 @@
         "name": "stakeTokens",
         "outputs": [],
         "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "staking_Duration",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
         "type": "function"
     },
     {

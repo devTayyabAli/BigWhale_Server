@@ -53,6 +53,16 @@ const ensureIndexes = async () => {
     ]);
 
     // ── UserOtherReward ───────────────────────────────────────────
+    // Drop the old unique_user_stakeReward_type index if it exists with different options (sparse: true instead of partialFilterExpression)
+    const userOtherRewardIndexes = await db.collection("userotherrewards").listIndexes().toArray();
+    const hasOldIndex = userOtherRewardIndexes.some(
+      (idx) => idx.name === "unique_user_stakeReward_type" && idx.sparse === true
+    );
+    if (hasOldIndex) {
+      console.log("Dropping old unique_user_stakeReward_type index (with sparse: true)");
+      await db.collection("userotherrewards").dropIndex("unique_user_stakeReward_type");
+    }
+
     await db.collection("userotherrewards").createIndexes([
       { key: { userId: 1 },                    name: "idx_userOtherReward_userId" },
       { key: { type: 1 },                      name: "idx_userOtherReward_type" },
@@ -61,6 +71,20 @@ const ensureIndexes = async () => {
       // Compound: bonus queries userId+type
       { key: { userId: 1, type: 1 },           name: "idx_userOtherReward_userId_type" },
       { key: { createdAt: 1 },                 name: "idx_userOtherReward_createdAt" },
+      // Compound: unique index for user, stakeRewardId, type (only for income_level)
+      {
+        key: { userId: 1, stakeRewardId: 1, type: 1 },
+        name: "unique_user_stakeReward_type",
+        unique: true,
+        partialFilterExpression: { type: "income_level" }
+      },
+      // Compound: unique index for user, stakeId (only for instant_bonus)
+      {
+        key: { userId: 1, stakeId: 1 },
+        name: "unique_instant_bonus_per_user_stake",
+        unique: true,
+        partialFilterExpression: { type: "instant_bonus" }
+      }
     ]);
 
     // ── TeamMember ────────────────────────────────────────────────

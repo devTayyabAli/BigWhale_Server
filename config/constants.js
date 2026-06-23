@@ -88,6 +88,7 @@ const OTHER_REWARD = {
   INCOME_LEVEL: "income_level",
   LEADERSHIP: "leadership",
   INSTANT_BONUS: "instant_bonus",
+  SALARY_RANK: "salary_rank",
 };
 const SEARCH_KEY = {
   DAILY: "daily",

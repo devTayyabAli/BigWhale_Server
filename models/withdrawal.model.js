@@ -13,6 +13,10 @@ const withdrawalSchema = new mongoose.Schema({
     default: 0,
     required: true,
   },
+  payoutPercentage: {
+    type: Number,
+    default: 50,
+  },
   transactionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Transaction', // Reference to the Transaction model

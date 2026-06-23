@@ -2,32 +2,32 @@ const Gift = require("../models/gift.model");
 
 const giftDetails = [
   {
-    title: "Laptop",
-    amount: 300,
+    title: "Rank 1 - Cash Reward",
+    amount: 120,
   },
   {
-    title: "Iphone 15 Pro Max",
-    amount: 1200,
+    title: "Rank 2 - Cash Reward",
+    amount: 400,
   },
   {
-    title: "Heavy Bike",
-    amount: 7000,
+    title: "Rank 3 - Cash Reward",
+    amount: 600,
   },
   {
-    title: "MG Car",
-    amount: 25000,
+    title: "Rank 4 - Cash Reward + Mobile",
+    amount: 1000,
   },
   {
-    title: "Fortuner Car + International Tours",
-    amount: 40000,
+    title: "Rank 5 - Cash Reward + International Tour",
+    amount: 1500,
   },
   {
-    title: "Mercedes C Class + Home",
-    amount: 200000,
+    title: "Rank 6 - Cash Reward + Yamaha YB125Z-DX",
+    amount: 2000,
   },
   {
-    title: "Farm Aircraft Helicopter",
-    amount: 500000,
+    title: "Rank 7 - Cash Reward + Suzuki Cultus AGS",
+    amount: 5000,
   },
 ];
 

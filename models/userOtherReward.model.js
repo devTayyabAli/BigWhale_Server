@@ -14,7 +14,7 @@ const userOtherRewardSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["income_level", "leadership", "instant_bonus"],
+      enum: ["income_level", "leadership", "instant_bonus", "salary_rank"],
       required: false,
     },
     amount: { type: String, required: true, default: 0 },
@@ -62,7 +62,11 @@ const userOtherRewardSchema = new mongoose.Schema(
 // dedup guard via the unique index below.
 userOtherRewardSchema.index(
   { userId: 1, stakeRewardId: 1, type: 1 },
-  { unique: true, sparse: true, name: "unique_user_stakeReward_type" }
+  {
+    unique: true,
+    partialFilterExpression: { type: "income_level" },
+    name: "unique_user_stakeReward_type",
+  }
 );
 
 // Prevent duplicate instant_bonus rewards for the same (upline user, stake).
