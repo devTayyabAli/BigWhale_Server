@@ -66,7 +66,7 @@ const getReferralStats = async (request, response) => {
     // const withdrawalAmount = await withdrawal?.totalWithdrawalAmount(_id);//
     // const totalBonus = stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus;//
     // const availableBonusBalance = totalBonus - (withdrawalAmount[0]?.totalAmount || 0);//
-    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance } = await calculateTotalWithdrawalAmount(_id)
+    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = await calculateTotalWithdrawalAmount(_id)
     const userDetail = await User.findById(_id);
     const userRank = userDetail?.userRankId;
     return response.status(HTTP_STATUS_CODE.OK).json({
@@ -81,6 +81,7 @@ const getReferralStats = async (request, response) => {
       stakingRewardBonus,
       referralLevelBonus,
       leadershipBonus,
+      salaryBonus: salaryRankBonus,
       instantRewardBonus,
       totalBonus,
       userRank,
@@ -121,7 +122,7 @@ const getReferralStatsByUserID = async (request, response) => {
     // const withdrawalAmount = await withdrawal?.totalWithdrawalAmount(_id);//
     // const totalBonus = stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus;//
     // const availableBonusBalance = totalBonus - (withdrawalAmount[0]?.totalAmount || 0);//
-    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance } = await calculateTotalWithdrawalAmount(_id)
+    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = await calculateTotalWithdrawalAmount(_id)
     const userDetail = await User.findById(_id);
     const userRank = userDetail?.userRankId;
     return response.status(HTTP_STATUS_CODE.OK).json({
@@ -136,6 +137,7 @@ const getReferralStatsByUserID = async (request, response) => {
       stakingRewardBonus,
       referralLevelBonus,
       leadershipBonus,
+      salaryBonus: salaryRankBonus,
       instantRewardBonus,
       totalBonus,
       userRank,

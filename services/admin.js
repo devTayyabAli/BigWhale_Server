@@ -607,163 +607,95 @@ const getStakeHistory = async (status, stakeId, fromDate, toDate, page, limit) =
 
 const getTodayStakeReward = async (page, limit, startDate, endDate, search, userName) => {
   try {
-    const skip = (page - 1) * limit;
+    const skip = (page - 1) * parseInt(limit);
     const limitValue = parseInt(limit);
-    const today = moment().format('YYYY-MM-DD');
 
-    // --- OPTIMIZATION 1: Create index-friendly date ranges ---
-    // This allows MongoDB to use an index on `createdAt` for faster queries.
-
-    let matchStage = {
-      "status": DEFAULT_STATUS.ACTIVE,
-      rewardPercentage: 0.4
-    };
-
-    // if (startDate && endDate) {
-    //   const start = moment(startDate).startOf('day').toDate();
-    //   const end = moment(endDate).endOf('day').toDate();
-    //   matchStage.createdAt = { $gte: start, $lte: end };
-    // } else if (search === SEARCH_KEY.DAILY) {
-    //   const todayStart = moment().startOf('day').toDate();
-    //   const todayEnd = moment().endOf('day').toDate();
-    //   matchStage.createdAt = { $gte: todayStart, $lte: todayEnd };
-    // } else if (search === SEARCH_KEY.WEEKLY) {
-    //   const weekStart = moment().startOf("week").toDate();
-    //   const weekEnd = moment().endOf("week").toDate();
-    //   matchStage.createdAt = { $gte: weekStart, $lte: weekEnd };
-    // } else if (search === SEARCH_KEY.MONTHLY) {
-    //   const monthStart = moment().startOf("month").toDate();
-    //   const monthEnd = moment().endOf("month").toDate();
-    //   matchStage.createdAt = { $gte: monthStart, $lte: monthEnd };
-    // }
+    // Match against UserStakeReward.createdAt (the daily reward payout date)
+    let matchStage = {};
 
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
       end.setHours(23 + 5, 59, 59, 999);
-      matchStage = {
-        "status": DEFAULT_STATUS.ACTIVE,
-        rewardPercentage: 0.4,
-        createdAt: {
-          $gte: new Date(start),
-          $lte: new Date(end)
-        }
-      };
+      matchStage.createdAt = { $gte: start, $lte: end };
     } else if (search === SEARCH_KEY.DAILY) {
-      matchStage = {
-        "status": DEFAULT_STATUS.ACTIVE,
-        rewardPercentage: 0.4,
-        $expr: {
-          $eq: [
-            { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-            today
-          ]
-        }
+      matchStage.createdAt = {
+        $gte: moment().startOf('day').toDate(),
+        $lte: moment().endOf('day').toDate(),
       };
     } else if (search === SEARCH_KEY.WEEKLY) {
-      const startOfWeek = moment().startOf("week").toDate();
-      matchStage = {
-        "status": DEFAULT_STATUS.ACTIVE,
-        rewardPercentage: 0.4,
-        $expr: {
-          $eq: [
-            { $isoWeek: "$createdAt" },
-            { $isoWeek: startOfWeek }
-          ]
-        }
+      matchStage.createdAt = {
+        $gte: moment().startOf('isoWeek').toDate(),
+        $lte: moment().endOf('isoWeek').toDate(),
       };
     } else if (search === SEARCH_KEY.MONTHLY) {
-      matchStage = {
-        "status": DEFAULT_STATUS.ACTIVE,
-        rewardPercentage: 0.4,
-        $expr: {
-          $eq: [
-            { $month: "$createdAt" },
-            { $month: new Date(today) }
-          ]
-        }
+      matchStage.createdAt = {
+        $gte: moment().startOf('month').toDate(),
+        $lte: moment().endOf('month').toDate(),
+      };
+    } else {
+      // Default: today
+      matchStage.createdAt = {
+        $gte: moment().startOf('day').toDate(),
+        $lte: moment().endOf('day').toDate(),
       };
     }
 
-    // Partial, case-insensitive username search
+    // Optional username filter — resolve to userId first
     if (userName) {
       const user = await User.findOne({ userName: { $regex: userName, $options: 'i' } });
-      if (user) {
-        matchStage.userId = user._id;
-      } else {
+      if (!user) {
         return { userStakeReward: [], totalCount: 0, totalStakeAmount: 0 };
       }
+      matchStage.userId = user._id;
     }
 
-    // --- OPTIMIZATION 2: Use a single aggregation pipeline with $facet ---
+    // Query UserStakeReward directly — each row is one daily reward payout
     const aggregationPipeline = [
-      {
-        $match: matchStage // The first stage uses an index for speed.
-      },
+      { $match: matchStage },
+      // Join user for userName display
       {
         $lookup: {
-          from: "userstakerewards",
-          localField: "_id",
-          foreignField: "stakeId",
-          as: "rewards"
-        }
-      },
-      {
-        $unwind: {
-          path: "$rewards",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $group: {
-          _id: "$_id",
-          userId: { $first: "$userId" },
-          stakeAmount: { $first: "$amount" },
-          totalRewardAmount: { $sum: { $ifNull: [{ $toDouble: "$rewards.amount" }, 0] } },
-          date: { $first: "$createdAt" },
-          status: { $first: "$status" }
-        }
-      },
-      {
-        $lookup: { // We only lookup users for the documents that passed the first match.
           from: "users",
           localField: "userId",
           foreignField: "_id",
           as: "user"
         }
       },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+      // Join stake for the principal amount and status
       {
-        $unwind: {
-          path: "$user",
-          preserveNullAndEmptyArrays: true
+        $lookup: {
+          from: "stakes",
+          localField: "stakeId",
+          foreignField: "_id",
+          as: "stake"
         }
       },
+      { $unwind: { path: "$stake", preserveNullAndEmptyArrays: true } },
       {
-        // $facet runs multiple aggregation pipelines on the same set of input documents.
         $facet: {
-          // Pipeline 1: Get the paginated data
           data: [
-            { $sort: { date: 1 } },
+            { $sort: { createdAt: -1 } },
             { $skip: skip },
             { $limit: limitValue },
             {
               $project: {
-                _id: 0, // Exclude _id
+                _id: 0,
                 userName: "$user.userName",
-                totalRewardAmount: 1,
-                stakeAmount: 1,
-                date: 1,
-                status: 1
+                rewardAmount: "$amount",       // daily reward paid out
+                stakeAmount: "$stake.amount",  // principal (for reference)
+                date: "$createdAt",
+                status: "$stake.status"
               }
             }
           ],
-          // Pipeline 2: Get the metadata (total count and amount)
           metadata: [
             {
               $group: {
                 _id: null,
                 totalCount: { $sum: 1 },
-                totalStakeAmount: { $sum: "$stakeAmount" }
+                totalStakeAmount: { $sum: "$amount" }  // sum of reward payouts
               }
             }
           ]
@@ -771,8 +703,7 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
       }
     ];
 
-    const result = await Stake.aggregate(aggregationPipeline);
-
+    const result = await UserStakeReward.aggregate(aggregationPipeline);
     const data = result[0].data;
     const metadata = result[0].metadata[0];
 
@@ -784,7 +715,7 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
 
   } catch (err) {
     console.log(err);
-    return err; // Consider more robust error handling
+    return err;
   }
 };
 

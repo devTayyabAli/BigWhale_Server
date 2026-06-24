@@ -16,7 +16,7 @@ const {
 } = require("../config/constants.js");
 const Transaction = require("../models/transaction.model.js");
 const socket = require("../helpers/sockets");
-const { transferFunds, getWithdrawalAmountFromContract, getAdminBlnc, stakeTokenOnChain } = require("../helpers/web3.js");
+const { transferFunds, getWithdrawalAmountFromContract, getAdminBlnc, stakeTokenOnChain, estimateTransferNetworkFee } = require("../helpers/web3.js");
 const PartialWithdrawals = require("../models/partialWithdrawal.model.js");
 const helper = require("../helpers/index");
 const User = require("../models/user.model.js");
@@ -257,10 +257,33 @@ const getWithdrawalAmount = async (req, response) => {
   const userId = new ObjectId(userID);
   const { combinedTotalAmount, stakingAmount, otherRewardAmount } =
     await calculateTotalWithdrawalAmount(userId);
+
+  // Pre-calculate the network fee so the UI can show the real net amount.
+  // The fee is only deducted when the partial-withdrawal (other-reward) leg is
+  // sent via transferFunds, so we estimate it against the user's wallet address.
+  let networkFeeKgc = 0;
+  try {
+    const user = await User.findById(userId).select("walletAddress").lean();
+    if (user?.walletAddress && combinedTotalAmount > 0) {
+      // Estimate against 80% of the combined amount (the portion actually transferred)
+      networkFeeKgc = await estimateTransferNetworkFee(
+        user.walletAddress,
+        Number((combinedTotalAmount * 0.8).toFixed(8))
+      );
+    }
+  } catch (err) {
+    console.error("Network fee estimation failed:", err?.message);
+  }
+
   response.success = true;
   response.message = "Withdrawal amount calculated";
   response.status = 200;
-  response.data = { combinedTotalAmount, stakingAmount, otherRewardAmount };
+  response.data = {
+    combinedTotalAmount,
+    stakingAmount,
+    otherRewardAmount,
+    networkFeeKgc,
+  };
   return response;
 };
 

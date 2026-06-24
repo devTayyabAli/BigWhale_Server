@@ -4,6 +4,7 @@ const checkIfAuthenticated = require("../middleware/checkIfAuthenticated");
 const SettingController = require("../controllers/setting.controller");
 const {
   createConfigValidation,
+  updateConfigValidation,
 } = require("../middleware/validations/config.validation");
 router.post(
   "/",
@@ -21,6 +22,7 @@ router.get(
 router.put(
   "/:id",
   //  checkIfAuthenticated,
+  updateConfigValidation,
   SettingController.update
 );
 

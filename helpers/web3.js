@@ -175,11 +175,51 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
   }
 };
 
+/**
+ * Estimate the network fee (in KGC tokens) that will be deducted from a
+ * partial-withdrawal transfer.  Uses the same logic as `transferFunds` so the
+ * value shown in the UI matches what the user actually receives.
+ *
+ * @param {string} toAddress  - recipient wallet address
+ * @param {number} amount     - gross KGC amount to transfer (before fee)
+ * @returns {Promise<number>} estimated KGC fee (0 on error so UI stays safe)
+ */
+const estimateTransferNetworkFee = async (toAddress, amount) => {
+  try {
+    const web3 = getWeb3();
+    const { abi, address } = CONTRACT_DETAILS.kgc;
+    const methods = await getContractMethods(abi, address);
+
+    const transferFunc = methods.transfer(
+      toAddress,
+      web3.utils.toWei(`${Number(Number(amount).toFixed(8))}`, "ether")
+    );
+
+    const gasFee = await transferFunc.estimateGas({
+      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+    });
+    const gasPrice = await web3.eth.getGasPrice();
+    const txTotalGasPrice = gasFee * Number(gasPrice);
+    const OneUSDC = await getUSDCLivePrice();
+    const txTotalGasPriceInBNB = web3.utils.fromWei(
+      `${Number(txTotalGasPrice.toFixed(8))}`,
+      "ether"
+    );
+    const UDCToDeduct = txTotalGasPriceInBNB * OneUSDC;
+    const KGCToDeduct = await getKGCAmount(UDCToDeduct);
+    return Number(Number(KGCToDeduct).toFixed(8));
+  } catch (err) {
+    console.error("estimateTransferNetworkFee error:", err?.message);
+    return 0;
+  }
+};
+
 module.exports = {
   transferFunds,
   getUSDCLivePrice,
   getAdminBlnc,
   getWithdrawalAmountFromContract,
   truncateDecimals,
-  stakeTokenOnChain
+  stakeTokenOnChain,
+  estimateTransferNetworkFee,
 };

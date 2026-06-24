@@ -87,20 +87,36 @@ const updateParentProcessedAt = async (payload, startOfToday) => {
 
 const notifyUserAndFireEmit = async (object) => {
   for (let i = 0; i < object.length; i++) {
-    await sendRankUpdationEmail(object[i]?.users?.email, object[i]?.rank);
+    const user = object[i]?.users;
+    const rank = object[i]?.rank;
+
+    await sendRankUpdationEmail(user?.email, rank);
+
     const createNotification = await Notification.create({
-      userId: object[i]?.users?._id,
+      userId: user?._id,
       notificationType: "Rank Updation",
-      description: `${object[i]?.users?._id} rank has been updated to ${object[i]?.rank?.title}`,
+      description: `${user?._id} rank has been updated to ${rank?.title}`,
     });
 
     if (createNotification) {
+      // ── Notify the user in their own room ─────────────────────────────
       socket.io
-        .to(`${object[i]?.users?._id}`)
+        .to(`${user?._id}`)
         .emit("rankUpdationNotification", {
           title: createNotification?.notificationType,
           description: createNotification?.description,
         });
+
+      // ── Notify all admins via the global admin-events channel ──────────
+      socket.io.emit("admin-events", {
+        type: "rank_achieved",
+        title: "🏆 Rank Achieved",
+        description: `${user?.userName || user?.email} has achieved ${rank?.title}`,
+        userId: user?._id,
+        rankTitle: rank?.title,
+        starKey: rank?.starKey,
+        createdAt: new Date(),
+      });
     }
   }
 };

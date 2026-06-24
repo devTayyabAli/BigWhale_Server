@@ -15,10 +15,12 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  readByAdmin: {
+    type: Boolean,
+    default: false,
+  },
 },
-{ timestamps: true,
-  // collection: 'notifications'
-},
+{ timestamps: true },
 );
 
 // Add a pre-save middleware to update the `updatedAt` field before saving
