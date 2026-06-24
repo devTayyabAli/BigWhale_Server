@@ -61,7 +61,8 @@ io.on("connection", (socketIo) => {
   socketIo.on("capping", async (userId) => {
     if (userId) {
       const capping = await referral.handleCappingEvent(userId);
-      io.emit("cappingAmount", capping);
+      // ✅ FIX: emit only back to the requesting socket, not broadcast to all users
+      socketIo.emit("cappingAmount", capping);
     }
   });
   socketIo.on("bannedUser", async (userId) => {

@@ -756,44 +756,42 @@ const getLatestStake = async (userID) => {
     .limit(1);
 };
 
-const stakeAmountTaken = async (userId, stakeDate) => {
+/**
+ * Sum all rewards earned by a user since `stakeDate`.
+ * Pass `null` (or omit) to count all rewards across all time.
+ *
+ * NOTE: the optional `stakeDate` param is kept for backwards-compat but
+ * handleCappingEvent now always passes `null` so the full lifetime total
+ * is used. This prevents the capping progress from resetting to 0 after
+ * a stake expires — rewards already earned must still count against the cap.
+ */
+const stakeAmountTaken = async (userId, stakeDate = null) => {
   try {
-    const userStakeReward = await UserStakeReward.aggregate([
-      {
-        $match: {
-          userId: new ObjectId(userId),
-          createdAt: { $gte: new Date(stakeDate) }
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          totalAmount: { $sum: { $ifNull: ["$amount", 0] } },
-        },
-      },
+    // ✅ FIX: only add the $gte filter when a stakeDate is explicitly provided.
+    // Previously, passing new Date(null) — which equals epoch-0 — looked fine
+    // but passing new Date(Date.now()) when oldestStaking was null would
+    // exclude ALL historical rewards, making earnAmount always 0.
+    const dateFilter = stakeDate ? { $gte: new Date(stakeDate) } : undefined;
+    const matchStake = { userId: new ObjectId(userId), ...(dateFilter && { createdAt: dateFilter }) };
+    const matchOther = { userId: new ObjectId(userId), ...(dateFilter && { createdAt: dateFilter }) };
+
+    const [userStakeReward, userOtherReward] = await Promise.all([
+      UserStakeReward.aggregate([
+        { $match: matchStake },
+        { $group: { _id: null, totalAmount: { $sum: { $ifNull: ["$amount", 0] } } } },
+      ]),
+      UserOtherReward.aggregate([
+        { $match: matchOther },
+        { $group: { _id: null, totalAmount: { $sum: { $ifNull: ["$amount", 0] } } } },
+      ]),
     ]);
-    const userOtherReward = await UserOtherReward.aggregate([
-      {
-        $match: {
-          userId: new ObjectId(userId),
-          createdAt: { $gte: new Date(stakeDate) }
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          totalAmount: { $sum: { $ifNull: ["$amount", 0] } },
-        },
-      },
-    ]);
-    const totalUserStakeReward =
-      userStakeReward.length > 0 ? userStakeReward[0].totalAmount : 0;
-    const totalUserOtherReward =
-      userOtherReward.length > 0 ? userOtherReward[0].totalAmount : 0;
-    const rewardTaken = totalUserStakeReward + totalUserOtherReward;
-    return rewardTaken;
+
+    const totalUserStakeReward = userStakeReward.length > 0 ? userStakeReward[0].totalAmount : 0;
+    const totalUserOtherReward = userOtherReward.length > 0 ? userOtherReward[0].totalAmount : 0;
+    return totalUserStakeReward + totalUserOtherReward;
   } catch (error) {
-    console.error("error======>", error);
+    console.error("stakeAmountTaken error:", error);
+    return 0;
   }
 };
 
@@ -808,7 +806,7 @@ const handleCappingEvent = async (userId, date = null) => {
     const userObjectId = new ObjectId(userId);
 
     // ── Batch: fetch all settings + user rank + stake aggregate in parallel ──
-    const [settings, userRank, stakingAmount, oldestStaking] = await Promise.all([
+    const [settings, userRank, stakingAmount] = await Promise.all([
       getSettingsWithKeys([SETTING.NORMAL_CAPPING, SETTING.MARKET_CAPPING, SETTING.STAKE_REWARD_PER_DAY]),
       User.findById(userObjectId).select("userRankId").lean(),
       Stake.aggregate([
@@ -826,24 +824,26 @@ const handleCappingEvent = async (userId, date = null) => {
           },
         },
       ]),
-      Stake.findOne({
-        userId: userObjectId,
-        status: DEFAULT_STATUS.ACTIVE,
-        endDate: { $gte: refDate },
-      }).sort({ createdAt: 1 }).select("createdAt").lean(),
     ]);
 
-    const normalCapping    = settings[SETTING.NORMAL_CAPPING];
-    const marketCapping    = settings[SETTING.MARKET_CAPPING];
-    const stakeRewardPerDay= settings[SETTING.STAKE_REWARD_PER_DAY];
+    const normalCapping     = settings[SETTING.NORMAL_CAPPING];
+    const marketCapping     = settings[SETTING.MARKET_CAPPING];
+    const stakeRewardPerDay = settings[SETTING.STAKE_REWARD_PER_DAY];
 
+    // A user with no rank (userRankId === null) uses normal capping; ranked
+    // users use market capping (the higher multiplier).
     const cappingFormula         = userRank?.userRankId === null ? normalCapping : marketCapping;
     const totalActiveStakeAmount = stakingAmount.length > 0 ? stakingAmount[0].totalAmount : 0;
     const cappingAmount          = totalActiveStakeAmount * cappingFormula;
 
-    const earnAmount      = await stakeAmountTaken(userId, new Date(oldestStaking?.createdAt || Date.now()));
+    // ✅ FIX: count ALL rewards ever earned (no date lower-bound).
+    // Previously the lower-bound was oldestStaking.createdAt. When a stake
+    // expired / was removed, oldestStaking became null and the fallback was
+    // Date.now(), which excluded every historical reward → earnAmount = 0
+    // → capping progress always showed 0%.
+    const earnAmount      = await stakeAmountTaken(userId);   // no stakeDate = all time
     const rewardPercentage= stakeRewardPerDay;
-    const isCappingReached= earnAmount >= cappingAmount;
+    const isCappingReached= cappingAmount > 0 && earnAmount >= cappingAmount;
 
     if (isCappingReached) {
       // Run side-effects in parallel — no need to await sequentially
@@ -863,6 +863,10 @@ const handleCappingEvent = async (userId, date = null) => {
       cappingFormula,
       earnAmount,
       rewardPercentage,
+      // ✅ FIX: when cappingAmount is 0 (no active stakes) we still return
+      // the real earnAmount and a clear isCappingReached: false so the
+      // frontend can show a meaningful "0% — no active stake" state
+      // instead of dividing by zero.
       isCappingReached: cappingAmount === 0 ? false : isCappingReached,
     };
   } catch (error) {
