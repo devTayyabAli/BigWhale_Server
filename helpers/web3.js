@@ -24,12 +24,14 @@ const transferFunds = async (
   userId,
   partialWithdrawalAmountId
 ) => {
+  if (!toAddress) throw new Error("toAddress is required");
   try {
     const web3 = await getWeb3();
+    const cleanAddress = toAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.kgc;
     const methods = await getContractMethods(abi, address);
     const transferFunc = methods.transfer(
-      toAddress,
+      cleanAddress,
       web3.utils.toWei(`${Number(Number(amount)?.toFixed(8))}`, "ether")
     );
 
@@ -50,7 +52,7 @@ const transferFunds = async (
       tranferAmount=Number(Number(amount)?.toFixed(8))
     }
     const transferTxFunc = methods.transfer(
-      toAddress,
+      cleanAddress,
       web3.utils.toWei(`${tranferAmount}`, "ether")
     );
     const gasPrice2 = await transferTxFunc.estimateGas({
@@ -91,18 +93,30 @@ const transferFunds = async (
   }
 };
 const getUSDCLivePrice = async () => {
-  const res = await axios.get(process.env.LIVE_USDC_URL);
-  return res?.data?.USDC || 0;
+  try {
+    const res = await axios.get(process.env.LIVE_USDC_URL);
+    // CoinGecko: { binancecoin: { usd: 600.5 } }
+    return res?.data?.binancecoin?.usd || 0;
+  } catch (err) {
+    console.error("getUSDCLivePrice error:", err?.message);
+    return 0;
+  }
 };
 const getKGCAmount = async (amount) => {
-  const web3 = await getWeb3();
-  const { registerAbi, address } = CONTRACT_DETAILS.register;
-  const methods = await getContractMethods(registerAbi, address);
-  let kgcAmountToDeduct = await methods
-    .getKGCAmount(web3.utils.toWei(`${amount}`, "ether"))
-    .call();
-  kgcAmountToDeduct = web3.utils.fromWei(`${kgcAmountToDeduct}`, "ether");
-  return +kgcAmountToDeduct;
+  try {
+    const web3 = await getWeb3();
+    const { registerAbi, address } = CONTRACT_DETAILS.register;
+    const methods = await getContractMethods(registerAbi, address);
+    if (typeof methods.getKGCAmount !== "function") return 0;
+    let kgcAmountToDeduct = await methods
+      .getKGCAmount(web3.utils.toWei(`${amount}`, "ether"))
+      .call();
+    kgcAmountToDeduct = web3.utils.fromWei(`${kgcAmountToDeduct}`, "ether");
+    return +kgcAmountToDeduct;
+  } catch (err) {
+    console.error("getKGCAmount error (fee will be skipped):", err?.message);
+    return 0;
+  }
 };
 const getAdminBlnc=async ()=>{
   const web3 = await getWeb3();
@@ -121,22 +135,26 @@ const getAdminBlnc=async ()=>{
 }
 
 const getWithdrawalAmountFromContract=async(userAddress)=>{
+  if (!userAddress) return 0;
   const web3 = await getWeb3();
+  const cleanAddress = userAddress?.toLowerCase();
   const { abi, address } = CONTRACT_DETAILS.staking;
   const methods = await getContractMethods(abi, address);
   let blnc = await methods
-    .userRegistered(userAddress)
+    .userRegistered(cleanAddress)
     .call();
     blnc = web3.utils.fromWei(`${blnc?.withdrawedAmount}`, "ether");
     return blnc>0?truncateDecimals(Number(blnc),8):Number(blnc)|| 0
 }
 const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
+  if (!userAddress) throw new Error("userAddress is required");
   try {
     const web3 = await getWeb3();
+    const cleanAddress = userAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.staking;
     const methods = await getContractMethods(abi, address);
     const stakeFunc = methods.stakeTokenByOwner(
-      userAddress,
+      cleanAddress,
       web3.utils.toWei(`${Number(Number(amount)?.toFixed(8))}`, "ether")
     );
 
@@ -185,13 +203,15 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
  * @returns {Promise<number>} estimated KGC fee (0 on error so UI stays safe)
  */
 const estimateTransferNetworkFee = async (toAddress, amount) => {
+  if (!toAddress || !amount) return 0;
   try {
     const web3 = getWeb3();
+    const cleanAddress = toAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.kgc;
     const methods = await getContractMethods(abi, address);
 
     const transferFunc = methods.transfer(
-      toAddress,
+      cleanAddress,
       web3.utils.toWei(`${Number(Number(amount).toFixed(8))}`, "ether")
     );
 

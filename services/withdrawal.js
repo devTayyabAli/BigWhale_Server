@@ -104,6 +104,16 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
     partialWithdrawalAmount?.userId?._id,
     partialWithdrawalAmount?._id
   );
+
+  if (!receipt || !receipt.transactionHash) {
+    await PartialWithdrawal.deleteOne({ _id: partialWithdrawal?._id });
+    response.success = false;
+    response.message = "Blockchain transaction failed. Please check admin wallet balance or try again later.";
+    response.status = 400;
+    response.data = {};
+    return response;
+  }
+
   await updatePartialWithdrawal(receipt?.transactionHash)
   response.success = true;
   response.message = "Withdrawal added successfully";
@@ -202,7 +212,7 @@ const handleWithdrawalEvent = async (txHash) => {
 
 
     if (withdrawal) {
-      const payoutPct = withdrawal.payoutPercentage || 50;
+      const payoutPct = withdrawal.payoutPercentage ?? 80;
       const payoutRatio = payoutPct / 100;
 
       // ── Salary Rank distribution (20% of total withdrawal) ─────────────
@@ -556,7 +566,7 @@ const updatePartialWithdrawal = async (txHash) => {
       );
 
       // Reinvestment stake for partial withdrawal is ONLY done for legacy 50% withdrawals
-      const payoutPct = partialWithdrawal.withdrawalId?.payoutPercentage || 50;
+      const payoutPct = partialWithdrawal.withdrawalId?.payoutPercentage ?? 80;
       if (payoutPct === 50) {
         const originalPartialAmount = partialWithdrawal.amount;
         const reinvestAmount = Number((originalPartialAmount * 0.3).toFixed(8));
