@@ -205,6 +205,7 @@ const completeStake = async (req, response) => {
   const updatedStake = await Stake.findOneAndUpdate(
     { _id: stakeId },
     {
+      amount: fiatAmount,          // ensure stake.amount = USDT (reward cron base)
       transactionId: transaction?._id,
       endDate: momentToAdd(stakeDurationDays, stakeDurationUnit),
       rewardPercentage: stakeRewardPerDay,

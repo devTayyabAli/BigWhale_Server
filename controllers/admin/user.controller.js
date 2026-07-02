@@ -685,12 +685,11 @@ const stakingList = async (req, res) => {
     const { page, limit, search, startDate, endDate, status } = req.query;
     const skip = (page - 1) * limit;
 
-    let matchQuery = { rewardPercentage: 0.4 };
+    let matchQuery = {};
 
     if (userId && ObjectId.isValid(userId)) {
       matchQuery.userId = new ObjectId(userId);
     }
-    // matchQuery.rewardPercentage = 0.4
 
     if (status && ['active', 'pending', 'inactive'].includes(status)) {
       matchQuery.status = status;
