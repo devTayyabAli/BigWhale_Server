@@ -782,7 +782,7 @@ const stakeAmountTaken = async (userId, stakeDate = null) => {
       ]),
       UserOtherReward.aggregate([
         { $match: matchOther },
-        { $group: { _id: null, totalAmount: { $sum: { $ifNull: ["$amount", 0] } } } },
+        { $group: { _id: null, totalAmount: { $sum: { $toDouble: { $ifNull: ["$amount", 0] } } } } },
       ]),
     ]);
 
