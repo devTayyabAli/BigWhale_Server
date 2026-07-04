@@ -98,8 +98,14 @@ const getWithdrawals = async (req, res) => {
     // Apply pagination to the combined results
     const paginatedResults = combinedResults.slice(skip, skip + parseInt(limit));
 
-    // Convert contract amount to float safely
-    const contractAmount = parseFloat(await getWithdrawalAmountFromContract(user?.walletAddress)) || 0;
+    // Convert contract amount to float safely — wrapped in try/catch so an
+    // RPC rate-limit error never takes down the whole endpoint.
+    let contractAmount = 0;
+    try {
+      contractAmount = parseFloat(await getWithdrawalAmountFromContract(user?.walletAddress)) || 0;
+    } catch (contractErr) {
+      console.warn("Could not fetch contract withdrawal amount:", contractErr?.message);
+    }
 
     // Calculate only the sum of partial withdrawals
     const partialWithdrawalsSum = partialWithdrawals.reduce((sum, item) => {

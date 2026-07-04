@@ -134,17 +134,36 @@ const getAdminBlnc=async ()=>{
   return Math.floor(number * power) / power;
 }
 
-const getWithdrawalAmountFromContract=async(userAddress)=>{
+// In-memory cache for contract withdrawal amounts (60s TTL)
+const _withdrawalAmountCache = new Map();
+const _WITHDRAWAL_CACHE_TTL_MS = 60_000;
+
+const getWithdrawalAmountFromContract = async (userAddress) => {
   if (!userAddress) return 0;
-  const web3 = await getWeb3();
-  const cleanAddress = userAddress?.toLowerCase();
-  const { abi, address } = CONTRACT_DETAILS.staking;
-  const methods = await getContractMethods(abi, address);
-  let blnc = await methods
-    .userRegistered(cleanAddress)
-    .call();
+
+  const cacheKey = userAddress.toLowerCase();
+  const cached = _withdrawalAmountCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < _WITHDRAWAL_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  try {
+    const web3 = getWeb3();
+    const cleanAddress = userAddress.toLowerCase();
+    const { abi, address } = CONTRACT_DETAILS.staking;
+    const methods = await getContractMethods(abi, address);
+    let blnc = await methods.userRegistered(cleanAddress).call();
     blnc = web3.utils.fromWei(`${blnc?.withdrawedAmount}`, "ether");
-    return blnc>0?truncateDecimals(Number(blnc),8):Number(blnc)|| 0
+    const value = blnc > 0 ? truncateDecimals(Number(blnc), 8) : Number(blnc) || 0;
+
+    _withdrawalAmountCache.set(cacheKey, { value, ts: Date.now() });
+    return value;
+  } catch (err) {
+    console.warn("getWithdrawalAmountFromContract RPC error (returning 0):", err?.message);
+    // Return stale cache if available, otherwise 0
+    const stale = _withdrawalAmountCache.get(cacheKey);
+    return stale ? stale.value : 0;
+  }
 }
 const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
   if (!userAddress) throw new Error("userAddress is required");
