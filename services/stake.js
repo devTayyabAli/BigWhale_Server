@@ -1,4 +1,5 @@
 const Stake = require("../models/stake.model");
+const User = require("../models/user.model");
 const { ObjectId } = require("mongoose").Types;
 const {
   DEFAULT_STATUS,
@@ -132,6 +133,13 @@ const handleStakeEvent = async (txHash) => {
     console.warn(`handleStakeEvent: no stake found for transactionId=${transaction._id}`);
     return null;
   }
+
+  // ── Reset capping email flag on re-stake so the user gets a fresh
+  // notification next time they hit the cap after topping up.
+  User.updateOne(
+    { _id: stake.userId?._id || stake.userId },
+    { $set: { cappingEmailSentAt: null } }
+  ).catch((e) => console.error('handleStakeEvent: failed to reset cappingEmailSentAt:', e?.message));
 
   // ── Batch fetch setting in one cache read ──────────────────
   const instantBonusPercentage = await getSettingWithKey(SETTING.INSTANT_BONUS_PERCENTAGE);

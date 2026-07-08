@@ -48,27 +48,38 @@ const getReferralStats = async (request, response) => {
     const { _id } = request.user;
     const team = await Team.findOne({ userId: _id });
     const teamId = team?._id;
-    const directReferral = teamId ? await referral.numOfReferrals(teamId, 1) : 0;
-    const activeDirectReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : 0;
-    const pendingDirectReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.BANNED) : 0;
-    const directReferralBussiness = teamId ? await referral.numOfDirectReferralBussiness(teamId, 1, DEFAULT_STATUS.ACTIVE) : 0;
-    const downlineReferral = teamId ? await referral.numOfReferrals(teamId, { $ne: 1 }) : 0;
-    const activeDownlineReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : 0;
-    const pendingDownlineReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.BANNED) : 0;
-    const directDownlineBussiness = teamId ? await referral.numOfDirectReferralBussiness(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : 0;
- const todayBonus = await withdrawal.calculateTodayBonus(_id);
-    const todayTeam = teamId ? await referral.numOfReferralsByDate(teamId) : 0
 
-    // const stakingRewardBonus = await referral.stakingRewardAmount(_id);
-    // const referralLevelBonus = await referral.referralLevelAmount(_id,  OTHER_REWARD.INCOME_LEVEL);
-    // const leadershipBonus = await referral.referralLevelAmount(_id,  OTHER_REWARD.LEADERSHIP);
-    // const instantRewardBonus =  await referral.referralLevelAmount(_id,  OTHER_REWARD.INSTANT_BONUS);
-    // const withdrawalAmount = await withdrawal?.totalWithdrawalAmount(_id);//
-    // const totalBonus = stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus;//
-    // const availableBonusBalance = totalBonus - (withdrawalAmount[0]?.totalAmount || 0);//
-    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = await calculateTotalWithdrawalAmount(_id)
-    const userDetail = await User.findById(_id);
+    const [
+      directReferral,
+      activeDirectReferrals,
+      pendingDirectReferrals,
+      directReferralBussiness,
+      downlineReferral,
+      activeDownlineReferrals,
+      pendingDownlineReferrals,
+      directDownlineBussiness,
+      todayBonus,
+      todayTeam,
+      withdrawalInfo,
+      userDetail
+    ] = await Promise.all([
+      teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.BANNED) : Promise.resolve(0),
+      teamId ? referral.numOfDirectReferralBussiness(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfReferrals(teamId, { $ne: 1 }) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.BANNED) : Promise.resolve(0),
+      teamId ? referral.numOfDirectReferralBussiness(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      withdrawal.calculateTodayBonus(_id),
+      teamId ? referral.numOfReferralsByDate(teamId) : Promise.resolve(0),
+      calculateTotalWithdrawalAmount(_id),
+      User.findById(_id).select("userRankId").lean()
+    ]);
+
+    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
     const userRank = userDetail?.userRankId;
+
     return response.status(HTTP_STATUS_CODE.OK).json({
       directReferral,
       activeDirectReferrals,
@@ -87,7 +98,7 @@ const getReferralStats = async (request, response) => {
       userRank,
       totalWithdrawal: withdrawalAmount,
       availableBonusBalance,
-       todayBonus,
+      todayBonus,
       todayTeam
     });
   } catch (error) {
@@ -103,28 +114,37 @@ const getReferralStatsByUserID = async (request, response) => {
     if (!userId) {
       return response.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: "User ID is required" });
     }
-    const _id = new ObjectId(userId); // Convert to ObjectId if needed for MongoDB
+    const _id = new ObjectId(userId);
     const team = await Team.findOne({ userId: _id });
     const teamId = team?._id;
-    const directReferral = teamId ? await referral.numOfReferrals(teamId, 1) : 0;
-    const activeDirectReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : 0;
-    const pendingDirectReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.BANNED) : 0;
-    const directReferralBussiness = teamId ? await referral.numOfDirectReferralBussiness(teamId, 1, DEFAULT_STATUS.ACTIVE) : 0;
-    const downlineReferral = teamId ? await referral.numOfReferrals(teamId, { $ne: 1 }) : 0;
-    const activeDownlineReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : 0;
-    const pendingDownlineReferrals = teamId ? await referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.BANNED) : 0;
-    const directDownlineBussiness = teamId ? await referral.numOfDirectReferralBussiness(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : 0;
 
-    // const stakingRewardBonus = await referral.stakingRewardAmount(_id);
-    // const referralLevelBonus = await referral.referralLevelAmount(_id,  OTHER_REWARD.INCOME_LEVEL);
-    // const leadershipBonus = await referral.referralLevelAmount(_id,  OTHER_REWARD.LEADERSHIP);
-    // const instantRewardBonus =  await referral.referralLevelAmount(_id,  OTHER_REWARD.INSTANT_BONUS);
-    // const withdrawalAmount = await withdrawal?.totalWithdrawalAmount(_id);//
-    // const totalBonus = stakingRewardBonus + referralLevelBonus + leadershipBonus + instantRewardBonus;//
-    // const availableBonusBalance = totalBonus - (withdrawalAmount[0]?.totalAmount || 0);//
-    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = await calculateTotalWithdrawalAmount(_id)
-    const userDetail = await User.findById(_id);
+    const [
+      directReferral,
+      activeDirectReferrals,
+      pendingDirectReferrals,
+      directReferralBussiness,
+      downlineReferral,
+      activeDownlineReferrals,
+      pendingDownlineReferrals,
+      directDownlineBussiness,
+      withdrawalInfo,
+      userDetail
+    ] = await Promise.all([
+      teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.BANNED) : Promise.resolve(0),
+      teamId ? referral.numOfDirectReferralBussiness(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfReferrals(teamId, { $ne: 1 }) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      teamId ? referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.BANNED) : Promise.resolve(0),
+      teamId ? referral.numOfDirectReferralBussiness(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
+      calculateTotalWithdrawalAmount(_id),
+      User.findById(_id).select("userRankId").lean()
+    ]);
+
+    const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
     const userRank = userDetail?.userRankId;
+
     return response.status(HTTP_STATUS_CODE.OK).json({
       directReferral,
       activeDirectReferrals,

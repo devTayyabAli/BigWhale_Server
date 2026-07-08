@@ -806,9 +806,9 @@ const handleCappingEvent = async (userId, date = null) => {
     const userObjectId = new ObjectId(userId);
 
     // ── Batch: fetch all settings + user rank + stake aggregate in parallel ──
-    const [settings, userRank, stakingAmount] = await Promise.all([
+    const [settings, userRecord, stakingResult] = await Promise.all([
       getSettingsWithKeys([SETTING.NORMAL_CAPPING, SETTING.MARKET_CAPPING, SETTING.STAKE_REWARD_PER_DAY]),
-      User.findById(userObjectId).select("userRankId").lean(),
+      User.findById(userObjectId).select("userRankId lastCappingReachedAt").lean(),
       Stake.aggregate([
         {
           $match: {
@@ -832,26 +832,28 @@ const handleCappingEvent = async (userId, date = null) => {
 
     // A user with no rank (userRankId === null) uses normal capping; ranked
     // users use market capping (the higher multiplier).
-    const cappingFormula         = userRank?.userRankId === null ? normalCapping : marketCapping;
-    const totalActiveStakeAmount = stakingAmount.length > 0 ? stakingAmount[0].totalAmount : 0;
+    const cappingFormula         = userRecord?.userRankId === null ? normalCapping : marketCapping;
+    const totalActiveStakeAmount = stakingResult.length > 0 ? stakingResult[0].totalAmount : 0;
     const cappingAmount          = totalActiveStakeAmount * cappingFormula;
 
-    // ✅ FIX: count ALL rewards ever earned (no date lower-bound).
-    // Previously the lower-bound was oldestStaking.createdAt. When a stake
-    // expired / was removed, oldestStaking became null and the fallback was
-    // Date.now(), which excluded every historical reward → earnAmount = 0
-    // → capping progress always showed 0%.
-    const earnAmount      = await stakeAmountTaken(userId);   // no stakeDate = all time
-    const rewardPercentage= stakeRewardPerDay;
-    const isCappingReached= cappingAmount > 0 && earnAmount >= cappingAmount;
+    // earnAmount window:
+    //  - null  → user has never hit capping → count ALL-TIME rewards
+    //            (matches live server behaviour, e.g. correct 11%).
+    //  - date  → user previously hit capping → count only rewards earned
+    //            AFTER that moment so the new stake cycle starts fresh at 0%.
+    const earnSince  = userRecord?.lastCappingReachedAt || null;
+    const earnAmount = await stakeAmountTaken(userId, earnSince);
+    const rewardPercentage = stakeRewardPerDay;
+    const isCappingReached = cappingAmount > 0 && earnAmount >= cappingAmount;
 
     if (isCappingReached) {
+      const now = new Date();
       // Run side-effects in parallel — no need to await sequentially
       await Promise.all([
         getStakeExpiry(userObjectId),
         User.findOneAndUpdate(
           { _id: userObjectId },
-          { $set: { userRankId: null } },
+          { $set: { userRankId: null, lastCappingReachedAt: now } },
           { new: true }
         ),
       ]);
@@ -1366,8 +1368,10 @@ const referralLevelAmount = async (userId, type, startDate = null, endDate = nul
 
 const getStakeExpiry = async (userID) => {
   try {
+    // ✅ FIX: Only mark ACTIVE stakes inactive — never touch stakes that are
+    // already inactive or pending (e.g. a freshly created re-stake).
     return await Stake.findOneAndUpdate(
-      { userId: userID },
+      { userId: userID, status: DEFAULT_STATUS.ACTIVE },
       {
         $set: {
           cappingReached: true,

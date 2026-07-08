@@ -319,9 +319,21 @@ const processUserIncomeReward = async (
   const capping = await referral.handleCappingEvent(user._id);
   if (capping?.isCappingReached) {
     console.log(`saveIncomeRewardCron: capping reached for user ${user._id}.`);
-    sendCappingLimitEmail(user.email).catch((e) =>
-      console.error(`saveIncomeRewardCron: capping email failed for ${user._id}:`, e?.message)
-    );
+    // Only send the capping email once per calendar day per user.
+    const startOfToday = new Date(new Date().setUTCHours(0, 0, 0, 0));
+    const freshUser = await User.findById(user._id).select('cappingEmailSentAt email').lean();
+    const alreadyNotified = freshUser?.cappingEmailSentAt &&
+      new Date(freshUser.cappingEmailSentAt) >= startOfToday;
+
+    if (!alreadyNotified) {
+      sendCappingLimitEmail(freshUser?.email || user.email).catch((e) =>
+        console.error(`saveIncomeRewardCron: capping email failed for ${user._id}:`, e?.message)
+      );
+      User.updateOne(
+        { _id: user._id },
+        { $set: { cappingEmailSentAt: new Date() } }
+      ).catch(() => {});
+    }
     await markUserProcessed(user._id, eligibilityCutoff);
     return;
   }

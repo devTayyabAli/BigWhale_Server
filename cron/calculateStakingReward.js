@@ -25,6 +25,7 @@ const socket             = require("../helpers/sockets");
 const { SETTING }        = require("../config/constants");
 const { getSettingWithKey } = require("../helpers/setting");
 const Stake              = require("../models/stake.model");
+const User               = require("../models/user.model");
 const CronLog            = require("../models/cronLogs.model");
 const { sendCappingLimitEmail, sendCronFailureEmail } = require("../helpers/mail");
 const referral           = require("../services/referral");
@@ -100,10 +101,22 @@ const stakeRewardCron = async () => {
         ]);
 
         if (capping?.isCappingReached) {
-          // Fire-and-forget — email failure must not block the loop.
-          sendCappingLimitEmail(stake.userId.email).catch((e) =>
-            console.error(`stakeRewardCron: capping email failed for ${stake.userId._id}:`, e?.message)
-          );
+          // Only send the capping email once per calendar day per user.
+          // Re-check the user record freshly so we have the latest cappingEmailSentAt.
+          const startOfToday = new Date(new Date().setUTCHours(0, 0, 0, 0));
+          const freshUser = await User.findById(stake.userId._id).select('cappingEmailSentAt email').lean();
+          const alreadyNotified = freshUser?.cappingEmailSentAt &&
+            new Date(freshUser.cappingEmailSentAt) >= startOfToday;
+
+          if (!alreadyNotified) {
+            sendCappingLimitEmail(freshUser?.email || stake.userId.email).catch((e) =>
+              console.error(`stakeRewardCron: capping email failed for ${stake.userId._id}:`, e?.message)
+            );
+            User.updateOne(
+              { _id: stake.userId._id },
+              { $set: { cappingEmailSentAt: new Date() } }
+            ).catch(() => {});
+          }
           skipped++;
           continue;
         }

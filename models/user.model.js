@@ -219,6 +219,15 @@ const userSchema = new mongoose.Schema(
       default: null,
       required: false,
     },
+    // ── Tracks when the user last hit their capping limit.
+    // earnAmount for the next cap cycle is counted from this timestamp onward.
+    // null = user has never been capped → use all-time rewards (matches live behaviour).
+    lastCappingReachedAt: {
+      type: Date,
+      default: null,
+      required: false,
+    },
+
   },
   {
     timestamps: true,
