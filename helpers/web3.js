@@ -39,13 +39,11 @@ const transferFunds = async (
       from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
     });
     const gasPrice = await web3.eth.getGasPrice();
-    const txTotalGasPrice = gasFee * Number(gasPrice);
+    // Use BigInt to avoid floating-point precision loss on large Wei values
+    const txTotalGasPriceWei = BigInt(gasFee) * BigInt(gasPrice);
     const OneUSDC = await getUSDCLivePrice();
-    const txTotalGasPriceInBNB = web3.utils.fromWei(
-      `${Number(txTotalGasPrice?.toFixed(8))}`,
-      "ether"
-    );
-    const UDCToDeduct = txTotalGasPriceInBNB * OneUSDC;
+    const txTotalGasPriceInBNB = web3.utils.fromWei(txTotalGasPriceWei.toString(), "ether");
+    const UDCToDeduct = Number(txTotalGasPriceInBNB) * OneUSDC;
     const KGCToDeduct = await getKGCAmount(UDCToDeduct);
     let tranferAmount=Number((Number(amount) - KGCToDeduct)?.toFixed(8))
     if(tranferAmount<=0){
@@ -234,17 +232,17 @@ const estimateTransferNetworkFee = async (toAddress, amount) => {
       web3.utils.toWei(`${Number(Number(amount).toFixed(8))}`, "ether")
     );
 
-    const gasFee = await transferFunc.estimateGas({
-      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
-    });
-    const gasPrice = await web3.eth.getGasPrice();
-    const txTotalGasPrice = gasFee * Number(gasPrice);
-    const OneUSDC = await getUSDCLivePrice();
-    const txTotalGasPriceInBNB = web3.utils.fromWei(
-      `${Number(txTotalGasPrice.toFixed(8))}`,
-      "ether"
-    );
-    const UDCToDeduct = txTotalGasPriceInBNB * OneUSDC;
+    const [gasFee, gasPrice, OneUSDC] = await Promise.all([
+      transferFunc.estimateGas({ from: process.env.KGC_TOKENS_ADMIN_ADDRESS }),
+      web3.eth.getGasPrice(),
+      getUSDCLivePrice(),
+    ]);
+
+    // gasFee and gasPrice are large integers (Wei) — use BigInt arithmetic
+    // to avoid floating-point precision loss before converting to BNB.
+    const txTotalGasPriceWei = BigInt(gasFee) * BigInt(gasPrice);
+    const txTotalGasPriceInBNB = web3.utils.fromWei(txTotalGasPriceWei.toString(), "ether");
+    const UDCToDeduct = Number(txTotalGasPriceInBNB) * OneUSDC;
     const KGCToDeduct = await getKGCAmount(UDCToDeduct);
     return Number(Number(KGCToDeduct).toFixed(8));
   } catch (err) {

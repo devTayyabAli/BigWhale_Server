@@ -798,10 +798,11 @@ const stakeAmountTaken = async (userId, stakeDate = null) => {
 const handleCappingEvent = async (userId, date = null) => {
   try {
     if (!userId) {
-      return { cappingAmount: 0, cappingFormula: 0, earnAmount: 0, rewardPercentage: 0, isCappingReached: true };
+      return { cappingAmount: 0, cappingFormula: 0, cappingPlanLabel: null, earnAmount: 0, rewardPercentage: 0, isCappingReached: true };
     }
 
     const { getSettingsWithKeys } = require("../helpers/setting");
+    const { CAPPING_PLAN_LABELS } = require("../config/constants");
     const refDate = new Date(date || Date.now());
     const userObjectId = new ObjectId(userId);
 
@@ -830,9 +831,10 @@ const handleCappingEvent = async (userId, date = null) => {
     const marketCapping     = settings[SETTING.MARKET_CAPPING];
     const stakeRewardPerDay = settings[SETTING.STAKE_REWARD_PER_DAY];
 
-    // A user with no rank (userRankId === null) uses normal capping; ranked
-    // users use market capping (the higher multiplier).
+    // A user with no rank (userRankId === null) uses normal capping (Investor 2X);
+    // ranked users use market capping (Networker 3X — the higher multiplier).
     const cappingFormula         = userRecord?.userRankId === null ? normalCapping : marketCapping;
+    const cappingPlanLabel       = CAPPING_PLAN_LABELS[Number(cappingFormula)] || `${cappingFormula}X`;
     const totalActiveStakeAmount = stakingResult.length > 0 ? stakingResult[0].totalAmount : 0;
     const cappingAmount          = totalActiveStakeAmount * cappingFormula;
 
@@ -863,6 +865,7 @@ const handleCappingEvent = async (userId, date = null) => {
     return {
       cappingAmount,
       cappingFormula,
+      cappingPlanLabel,
       earnAmount,
       rewardPercentage,
       // ✅ FIX: when cappingAmount is 0 (no active stakes) we still return
@@ -873,7 +876,7 @@ const handleCappingEvent = async (userId, date = null) => {
     };
   } catch (error) {
     console.error("handleCappingEvent error:", error);
-    return { cappingAmount: 0, cappingFormula: 0, earnAmount: 0, rewardPercentage: 0, isCappingReached: false };
+    return { cappingAmount: 0, cappingFormula: 0, cappingPlanLabel: null, earnAmount: 0, rewardPercentage: 0, isCappingReached: false };
   }
 };
 
@@ -1370,8 +1373,10 @@ const getStakeExpiry = async (userID) => {
   try {
     // ✅ FIX: Only mark ACTIVE stakes inactive — never touch stakes that are
     // already inactive or pending (e.g. a freshly created re-stake).
+    // Also guard with cappingReached: false so a re-stake that was activated
+    // after the cap was hit is NOT accidentally deactivated by a stale cron run.
     return await Stake.findOneAndUpdate(
-      { userId: userID, status: DEFAULT_STATUS.ACTIVE },
+      { userId: userID, status: DEFAULT_STATUS.ACTIVE, cappingReached: false },
       {
         $set: {
           cappingReached: true,

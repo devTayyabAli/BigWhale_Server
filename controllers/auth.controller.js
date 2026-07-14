@@ -39,7 +39,16 @@ class AuthController {
         phoneNumber,
       } = req.body;
   
-      const formatPhone = phoneNumber.replace(/\s+/g, "");      
+      const formatPhone = phoneNumber.replace(/\s+/g, "");
+
+      // Guard: walletAddress is required and must be a valid EVM address
+      if (!walletAddress || !/^0x[0-9a-fA-F]{40}$/.test(walletAddress)) {
+        response.message = "A valid wallet address is required to register.";
+        response.status = 400;
+        response.success = false;
+        return;
+      }
+
       const userExists = await User.findOne({
         $or: [
           { walletAddress: { $regex: new RegExp('^' + walletAddress + '$', 'i') } },

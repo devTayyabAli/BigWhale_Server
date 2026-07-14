@@ -134,12 +134,14 @@ const handleStakeEvent = async (txHash) => {
     return null;
   }
 
-  // ── Reset capping email flag on re-stake so the user gets a fresh
-  // notification next time they hit the cap after topping up.
+  // ── Reset capping flags on re-stake so the new stake cycle starts fresh.
+  // cappingEmailSentAt  → user gets a fresh capping notification next time.
+  // lastCappingReachedAt → earnAmount window resets to NOW so rewards earned
+  //   before/during this restake don't falsely count against the new cap.
   User.updateOne(
     { _id: stake.userId?._id || stake.userId },
-    { $set: { cappingEmailSentAt: null } }
-  ).catch((e) => console.error('handleStakeEvent: failed to reset cappingEmailSentAt:', e?.message));
+    { $set: { cappingEmailSentAt: null, lastCappingReachedAt: new Date() } }
+  ).catch((e) => console.error('handleStakeEvent: failed to reset capping flags:', e?.message));
 
   // ── Batch fetch setting in one cache read ──────────────────
   const instantBonusPercentage = await getSettingWithKey(SETTING.INSTANT_BONUS_PERCENTAGE);

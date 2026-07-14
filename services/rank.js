@@ -443,11 +443,18 @@ const createUserRank = async (userRankPayloadIds, users, payload) => {
     return { error: true, message: "no rank update needed." };
   }
 
-  await User.updateMany(
-    { _id: { $in: userIdsToUpdate.map((update) => update._id) } },
-    userIdsToUpdate.map((update) => ({
-      $set: { userRankId: update.userRankId },
-    }))
+  // Update each user's userRankId individually so every user gets their own
+  // correct starKey value. The previous updateMany with an array of $set
+  // objects is invalid MongoDB syntax — it would apply only the first $set
+  // to every matched document, causing all updated users to receive the same
+  // (wrong) rank.
+  await Promise.all(
+    userIdsToUpdate.map((update) =>
+      User.updateOne(
+        { _id: update._id },
+        { $set: { userRankId: update.userRankId } }
+      )
+    )
   );
 
   return await UserRank.insertMany(payload);

@@ -103,8 +103,8 @@ const SETTING = {
   STAKE_REWARD_PER_DAY:"stake_reward_per_day",
   MINIMUM_WITHDRAWAL_PERCENTAGE:"minimum_withdrawal_percentage",
   WITHDRAWAL_DEDUCTION_PERCENTAGE:"withdrawal_deduction_percentage",
-  NORMAL_CAPPING:"normal_capping",
-  MARKET_CAPPING:"market_capping",
+  NORMAL_CAPPING:"normal_capping",   // Investor plan — 2X multiplier
+  MARKET_CAPPING:"market_capping",   // Networker plan — 3X multiplier
   P2P_TRANSFER_DEDUCTION_PERCENTAGE:"p2p_transfer_deduction_percentage",
   INSTANT_BONUS_PERCENTAGE:"instant_bonus_percentage",
   OTP_EXPIRY_DURATION:"otp_expiry_duration",
@@ -112,6 +112,17 @@ const SETTING = {
   STAKE_DURATION_UNIT:"stake_duration_unit",
   STAKE_DURATION_EXPIRY:"stake_duration_expiry",
 
+};
+
+/**
+ * Maps a capping multiplier value to its plan label.
+ * Used by both the Server (socket emit) and displayed in the Client.
+ *   2  → "Investor 2X"
+ *   3  → "Networker 3X"
+ */
+const CAPPING_PLAN_LABELS = {
+  2: "Investor 2X",
+  3: "Networker 3X",
 };
 const EMAIL_SUBJECT = {
   REGISTER: "Account Verification",
@@ -163,5 +174,6 @@ module.exports = {
   SEARCH_KEY,
   EMAIL_TEMPLATE_PATH,
   EMAIL_SUBJECT,
-  EXCHANGE_TYPES
+  EXCHANGE_TYPES,
+  CAPPING_PLAN_LABELS,
 }

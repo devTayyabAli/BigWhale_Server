@@ -162,6 +162,12 @@ const stakeRewardCron = async () => {
           ),
         ]);
 
+        // Notify this specific user their capping status has changed because
+        // a new staking reward was just added to their earnAmount.
+        // Using the user's room (joined via socket.emit("join", userId)) so
+        // only that user receives the update — not a global broadcast.
+        socket.io?.to(`${stake.userId._id}`).emit("cappingUpdate", {});
+
         console.log(`✅ Reward saved — stake: ${stake._id}, amount: ${amount}`);
         processed++;
 

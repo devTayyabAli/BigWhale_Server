@@ -22,6 +22,7 @@ const helper = require("../helpers/index");
 const User = require("../models/user.model.js");
 const Stake = require("../models/stake.model.js");
 const salaryRankService = require("./salaryRank");
+const { getSettingWithKey } = require("../helpers/setting");
 
 const create = async (req, response) => {
   const { userId, amount } = req.body;
@@ -98,8 +99,25 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
   const partialWithdrawalAmount = await PartialWithdrawal.findById(
     partialWithdrawal?._id
   ).populate("userId");
+
+  const toAddress = partialWithdrawalAmount?.userId?.walletAddress;
+
+  // Safety guard: never send tokens if the destination address is missing
+  // or doesn't match a basic hex wallet format.
+  if (!toAddress || !/^0x[0-9a-fA-F]{40}$/.test(toAddress)) {
+    await PartialWithdrawal.deleteOne({ _id: partialWithdrawal?._id });
+    console.error(`makePartialPayment: invalid or missing walletAddress for userId=${userId}, got="${toAddress}"`);
+    response.success = false;
+    response.message = "Withdrawal failed: user wallet address is not configured. Please contact support.";
+    response.status = 400;
+    response.data = {};
+    return response;
+  }
+
+  console.log(`makePartialPayment: sending ${amount * 0.8} BW to userId=${userId} walletAddress=${toAddress}`);
+
   const receipt = await withdrawAmount(
-    partialWithdrawalAmount?.userId?.walletAddress,
+    toAddress,
     partialWithdrawalAmount?.amount * 0.8,
     partialWithdrawalAmount?.userId?._id,
     partialWithdrawalAmount?._id
@@ -268,12 +286,16 @@ const getWithdrawalAmount = async (req, response) => {
   const { combinedTotalAmount, stakingAmount, otherRewardAmount } =
     await calculateTotalWithdrawalAmount(userId);
 
-  // Pre-calculate the network fee so the UI can show the real net amount.
-  // The fee is only deducted when the partial-withdrawal (other-reward) leg is
-  // sent via transferFunds, so we estimate it against the user's wallet address.
+  // Fetch the platform withdrawal deduction percentage (e.g. 5) in parallel
+  // with the gas fee estimate so the UI can always show the fee row.
   let networkFeeKgc = 0;
+  let withdrawalDeductionPercentage = 0;
   try {
-    const user = await User.findById(userId).select("walletAddress").lean();
+    const [user, deductionPct] = await Promise.all([
+      User.findById(userId).select("walletAddress").lean(),
+      getSettingWithKey(SETTING.WITHDRAWAL_DEDUCTION_PERCENTAGE),
+    ]);
+    withdrawalDeductionPercentage = Number(deductionPct || 0);
     if (user?.walletAddress && combinedTotalAmount > 0) {
       // Estimate against 80% of the combined amount (the portion actually transferred)
       networkFeeKgc = await estimateTransferNetworkFee(
@@ -293,6 +315,7 @@ const getWithdrawalAmount = async (req, response) => {
     stakingAmount,
     otherRewardAmount,
     networkFeeKgc,
+    withdrawalDeductionPercentage,
   };
   return response;
 };

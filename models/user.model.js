@@ -93,6 +93,8 @@ const userSchema = new mongoose.Schema(
     walletAddress: {
       type: String,
       required: false,
+      sparse: true,   // allows multiple null values, but enforces uniqueness on non-null
+      unique: true,
     },
     walletType: {
       type: String,

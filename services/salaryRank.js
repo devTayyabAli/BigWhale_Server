@@ -55,8 +55,24 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
     const rewardDocs = [];
 
     for (const rank of ranks) {
+      // rewardPercentage is stored as String in the DB schema — coerce safely.
       const rewardPercentage = Number(rank.rewardPercentage) || 0;
-      if (rewardPercentage <= 0) continue;
+      if (rewardPercentage <= 0) {
+        console.warn(
+          `distributeSalaryRankReward: rank starKey=${rank.starKey} has no ` +
+          `rewardPercentage set in DB — skipping this rank. ` +
+          `Please update the rank document to add a rewardPercentage value.`
+        );
+        continue;
+      }
+
+      // starKey must be a valid number for the $gte query to work correctly.
+      if (rank.starKey == null || isNaN(rank.starKey)) {
+        console.warn(
+          `distributeSalaryRankReward: rank _id=${rank._id} has no starKey — skipping.`
+        );
+        continue;
+      }
 
       // Pool share for this rank (e.g. 2% of total withdrawal)
       const rankPoolAmount = Number(
