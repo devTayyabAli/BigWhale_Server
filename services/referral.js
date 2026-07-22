@@ -953,6 +953,22 @@ const getStakeBonus = async (userId, page, limit) => {
     const skip = (page - 1) * limit;
     const limitValue = parseInt(limit);
 
+    // Dynamic database setting lookup for STAKE_REWARD_PER_DAY
+    const dbRewardSetting = Number(await getSettingWithKey(SETTING.STAKE_REWARD_PER_DAY)) || 0.4;
+
+    // Dynamically update any older stake records in DB whose rewardPercentage is unpopulated or mismatched
+    await Stake.updateMany(
+      {
+        userId: new ObjectId(userId),
+        $or: [
+          { rewardPercentage: { $exists: false } },
+          { rewardPercentage: null },
+          { rewardPercentage: { $ne: dbRewardSetting } }
+        ]
+      },
+      { $set: { rewardPercentage: dbRewardSetting } }
+    );
+
     // Calculate the total reward amount for the user
     const totalRewardAmount = await stakingRewardAmount(userId);
     const userStakeReward =
@@ -977,7 +993,7 @@ const getStakeBonus = async (userId, page, limit) => {
               stakeId: "$stakeId",
               createdAt: {
                 $dateToString: {
-                 format: "%Y-%m-%d %H:%M", // Format to group by year-month-day
+                  format: "%Y-%m-%d %H:%M", // Format to group by year-month-day
                   date: "$createdAt",
                 },
               },
@@ -986,7 +1002,9 @@ const getStakeBonus = async (userId, page, limit) => {
               $sum: { $toDouble: { $ifNull: ["$amount", 0] } },
             }, // Sum the amounts of rewards
             stakeAmount: { $first: "$stake.amount" },
-            percent: { $first: "$stake.rewardPercentage" },
+            percent: {
+              $first: { $ifNull: ["$stake.rewardPercentage", dbRewardSetting] }
+            },
           },
         },
         {
