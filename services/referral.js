@@ -855,7 +855,7 @@ const handleCappingEvent = async (userId, date = null) => {
         getStakeExpiry(userObjectId),
         User.findOneAndUpdate(
           { _id: userObjectId },
-          { $set: { userRankId: null, lastCappingReachedAt: now } },
+          { $set: { lastCappingReachedAt: now } },
           { new: true }
         ),
       ]);

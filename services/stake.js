@@ -165,28 +165,43 @@ const handleStakeEvent = async (txHash) => {
   const instantReward = helper.calculatePercentage(instantBonusPercentage, stake?.amount);
 
   if (stake?.userId?.referredBy) {
-    // Guard against duplicate instant_bonus for the same (upline user, stake).
-    // This can happen if the blockchain event is delivered more than once or if
-    // handleStakeEvent is retried after a partial failure.
-    // updateOne with upsert is atomic — no separate findOne round-trip needed.
-    await UserOtherReward.updateOne(
-      {
-        userId:  stake.userId.referredBy,
-        stakeId: stake._id,
-        type:    OTHER_REWARD.INSTANT_BONUS,
-      },
-      {
-        $setOnInsert: {
-          userId:           stake.userId.referredBy,
-          type:             OTHER_REWARD.INSTANT_BONUS,
-          amount:           instantReward,
-          stakeId:          stake._id,
-          levelId:          null,
-          rewardPercentage: instantBonusPercentage,
+    const referrerId = stake.userId.referredBy;
+    const referral = require("./referral");
+
+    // Check if referrer has an active stake AND has not reached their capping limit
+    const [referrerCapping, referrerActiveStake] = await Promise.all([
+      referral.handleCappingEvent(referrerId),
+      Stake.findOne({ userId: referrerId, status: DEFAULT_STATUS.ACTIVE }).lean(),
+    ]);
+
+    if (referrerActiveStake && !referrerCapping?.isCappingReached) {
+      // Guard against duplicate instant_bonus for the same (upline user, stake).
+      // This can happen if the blockchain event is delivered more than once or if
+      // handleStakeEvent is retried after a partial failure.
+      // updateOne with upsert is atomic — no separate findOne round-trip needed.
+      await UserOtherReward.updateOne(
+        {
+          userId:  referrerId,
+          stakeId: stake._id,
+          type:    OTHER_REWARD.INSTANT_BONUS,
         },
-      },
-      { upsert: true }
-    );
+        {
+          $setOnInsert: {
+            userId:           referrerId,
+            type:             OTHER_REWARD.INSTANT_BONUS,
+            amount:           instantReward,
+            stakeId:          stake._id,
+            levelId:          null,
+            rewardPercentage: instantBonusPercentage,
+          },
+        },
+        { upsert: true }
+      );
+    } else {
+      console.log(
+        `handleStakeEvent: skipping instant_bonus for referrer ${referrerId} — referrer is capped or has no active stake.`
+      );
+    }
   }
   socket.io.to(`${stake?.userId?._id}`).emit(CONTRACT_EVENTS.STAKE, {});
 

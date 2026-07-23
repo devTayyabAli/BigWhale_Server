@@ -24,8 +24,10 @@
 
 const Rank           = require("../models/rank.model");
 const User           = require("../models/user.model");
+const Stake          = require("../models/stake.model");
 const UserOtherReward = require("../models/userOtherReward.model");
 const { OTHER_REWARD, DEFAULT_STATUS } = require("../config/constants");
+const referral       = require("./referral");
 
 /**
  * Distribute salary rank rewards for a single confirmed withdrawal.
@@ -84,31 +86,45 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
       // ── 3. Find all active users who have achieved this rank ───────────
       //       userRankId stores the starKey of the highest achieved rank.
       //       A user qualifies if their userRankId >= this rank's starKey.
-      const holders = await User.find({
+      const candidateHolders = await User.find({
         status:     DEFAULT_STATUS.ACTIVE,
         userRankId: { $gte: rank.starKey },
       })
         .select("_id")
         .lean();
 
-      if (!holders || holders.length === 0) {
-        // No one has achieved this rank yet — amount goes to company wallet
+      // Filter candidateHolders to only include non-capped users with an active stake
+      const eligibleHolders = [];
+      if (candidateHolders && candidateHolders.length > 0) {
+        for (const holder of candidateHolders) {
+          const [holderCapping, activeStake] = await Promise.all([
+            referral.handleCappingEvent(holder._id),
+            Stake.findOne({ userId: holder._id, status: DEFAULT_STATUS.ACTIVE }).lean(),
+          ]);
+          if (activeStake && !holderCapping?.isCappingReached) {
+            eligibleHolders.push(holder);
+          }
+        }
+      }
+
+      if (!eligibleHolders || eligibleHolders.length === 0) {
+        // No eligible non-capped holder for this rank — amount goes to company wallet
         console.log(
           `distributeSalaryRankReward: rank ${rank.starKey} (${rewardPercentage}%) ` +
-          `not achieved — ${rankPoolAmount} BW → company/liquidity wallet.`
+          `has no eligible holders — ${rankPoolAmount} BW → company/liquidity wallet.`
         );
         totalUnachieved = Number((totalUnachieved + rankPoolAmount).toFixed(8));
         continue;
       }
 
-      // ── 4. Split pool equally among all holders ────────────────────────
+      // ── 4. Split pool equally among all eligible holders ───────────────
       const perUserAmount = Number(
-        (rankPoolAmount / holders.length).toFixed(8)
+        (rankPoolAmount / eligibleHolders.length).toFixed(8)
       );
 
       if (perUserAmount <= 0) continue;
 
-      for (const holder of holders) {
+      for (const holder of eligibleHolders) {
         rewardDocs.push({
           userId:           holder._id,
           type:             OTHER_REWARD.SALARY_RANK,
