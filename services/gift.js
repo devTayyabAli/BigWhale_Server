@@ -104,7 +104,7 @@ const getGiftRequests = async (req, response) => {
       matchQuery.giftId = giftObj._id;
     }
   }
-  
+
   const giftRequest = await RankGiftRequest.find(matchQuery)
     .populate("giftId")
     .populate("rankId")
