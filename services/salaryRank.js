@@ -22,12 +22,13 @@
  *  block or roll back the underlying withdrawal.
  */
 
-const Rank           = require("../models/rank.model");
-const User           = require("../models/user.model");
-const Stake          = require("../models/stake.model");
+const Rank            = require("../models/rank.model");
+const User            = require("../models/user.model");
+const Stake           = require("../models/stake.model");
 const UserOtherReward = require("../models/userOtherReward.model");
-const { OTHER_REWARD, DEFAULT_STATUS } = require("../config/constants");
-const referral       = require("./referral");
+const UserStakeReward = require("../models/userStakingReward.model");
+const { OTHER_REWARD, DEFAULT_STATUS, SETTING } = require("../config/constants");
+const { getSettingsWithKeys }                   = require("../helpers/setting");
 
 /**
  * Distribute salary rank rewards for a single confirmed withdrawal.
@@ -53,7 +54,13 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
       return { distributed: 0, unachieved: totalWithdrawalAmount };
     }
 
-    // ── 2. Process each rank ─────────────────────────────────────────────
+    // ── 2. Pre-fetch capping multipliers once (reused for every rank) ────
+    const cappingSettings = await getSettingsWithKeys([
+      SETTING.NORMAL_CAPPING,
+      SETTING.MARKET_CAPPING,
+    ]);
+
+    // ── 3. Process each rank ─────────────────────────────────────────────
     const rewardDocs = [];
 
     for (const rank of ranks) {
@@ -93,18 +100,83 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
         .select("_id")
         .lean();
 
-      // Filter candidateHolders to only include non-capped users with an active stake
+      // Filter candidateHolders to only include non-capped users with an active stake.
+      // IMPORTANT: We do NOT call handleCappingEvent() here because:
+      //  1. It has a side-effect (updates lastCappingReachedAt on the user document).
+      //  2. It counts ALL UserOtherReward (including salary rewards themselves) toward
+      //     the capping limit, creating a self-reinforcing exclusion loop where users
+      //     who earned salary bonuses eventually stop receiving them.
+      //  Instead we do a direct, lightweight, side-effect-free inline capping check
+      //  that only counts staking rewards (UserStakeReward) against the cap.
       const eligibleHolders = [];
       if (candidateHolders && candidateHolders.length > 0) {
-        for (const holder of candidateHolders) {
-          const [holderCapping, activeStake] = await Promise.all([
-            referral.handleCappingEvent(holder._id),
-            Stake.findOne({ userId: holder._id, status: DEFAULT_STATUS.ACTIVE }).lean(),
-          ]);
-          if (activeStake && !holderCapping?.isCappingReached) {
-            eligibleHolders.push(holder);
-          }
-        }
+        await Promise.all(
+          candidateHolders.map(async (holder) => {
+            // 1. Must have at least one active stake (trust DB status, no endDate filter
+            //    because endDate may lag if the cron hasn't expired the stake yet).
+            const activeStake = await Stake.findOne({
+              userId: holder._id,
+              status: DEFAULT_STATUS.ACTIVE,
+            }).lean();
+
+            if (!activeStake) {
+              console.log(`distributeSalaryRankReward: userId=${holder._id} skipped — no active stake.`);
+              return;
+            }
+
+            // 2. Resolve the holder's full user record to get userRankId & capping reset date.
+            const holderUser = await User.findById(holder._id)
+              .select("userRankId lastCappingReachedAt")
+              .lean();
+
+            // 3. Calculate capping threshold from active stake amounts only.
+            const cappingFormula = holderUser?.userRankId === null
+              ? (Number(cappingSettings[SETTING.NORMAL_CAPPING]) || 2)
+              : (Number(cappingSettings[SETTING.MARKET_CAPPING])  || 3);
+
+            const stakeAgg = await Stake.aggregate([
+              {
+                $match: {
+                  userId: holder._id,
+                  status: DEFAULT_STATUS.ACTIVE,
+                },
+              },
+              { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
+            ]);
+            const totalActiveStake = stakeAgg.length > 0 ? stakeAgg[0].total : 0;
+            const cappingAmount    = totalActiveStake * cappingFormula;
+
+            if (cappingAmount <= 0) {
+              // No measurable stake → treat as not capped (safe default — include them).
+              eligibleHolders.push(holder);
+              return;
+            }
+
+            // 4. Sum ONLY staking rewards (not salary/other rewards) since
+            //    the user's last capping reset, to avoid double-counting.
+            const earnSince   = holderUser?.lastCappingReachedAt || null;
+            const dateFilter  = earnSince ? { $gte: new Date(earnSince) } : undefined;
+            const matchFilter = {
+              userId: holder._id,
+              ...(dateFilter && { createdAt: dateFilter }),
+            };
+            const stakeRewardAgg = await UserStakeReward.aggregate([
+              { $match: matchFilter },
+              { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
+            ]);
+            const earnAmount = stakeRewardAgg.length > 0 ? stakeRewardAgg[0].total : 0;
+
+            const isCapped = earnAmount >= cappingAmount;
+            if (isCapped) {
+              console.log(
+                `distributeSalaryRankReward: userId=${holder._id} skipped — capped ` +
+                `(earned ${earnAmount} >= cap ${cappingAmount}).`
+              );
+            } else {
+              eligibleHolders.push(holder);
+            }
+          })
+        );
       }
 
       if (!eligibleHolders || eligibleHolders.length === 0) {
@@ -140,7 +212,7 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
 
       console.log(
         `distributeSalaryRankReward: rank ${rank.starKey} (${rewardPercentage}%) — ` +
-        `${rankPoolAmount} BW split among ${holders.length} holder(s) = ` +
+        `${rankPoolAmount} BW split among ${eligibleHolders.length} holder(s) = ` +
         `${perUserAmount} BW each.`
       );
     }

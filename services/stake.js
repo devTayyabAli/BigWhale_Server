@@ -151,13 +151,26 @@ const handleStakeEvent = async (txHash) => {
     return null;
   }
 
-  // ── Reset capping flags on re-stake so the new stake cycle starts fresh.
-  // cappingEmailSentAt  → user gets a fresh capping notification next time.
-  // lastCappingReachedAt → earnAmount window resets to NOW so rewards earned
-  //   before/during this restake don't falsely count against the new cap.
-  User.updateOne(
+  // ── Reset cappingEmailSentAt only — NOT lastCappingReachedAt.
+  //
+  // cappingEmailSentAt is cleared so the user receives a fresh capping
+  // notification on their next cap event after this new stake.
+  //
+  // lastCappingReachedAt is intentionally NOT reset here.
+  //   • It is the single source of truth for the earnAmount window in
+  //     handleCappingEvent: "count all rewards since last cap hit".
+  //   • It is ONLY set by handleCappingEvent when the user actually reaches
+  //     their cap — never by a stake deposit.
+  //   • If we reset it here on every new stake, stakeAmountTaken() would only
+  //     count rewards earned since this deposit, making the capping bar show
+  //     near-0% progress even though the user had accumulated significant rewards.
+  //     (This was the "$541.48 / 2.6%" bug when total bonus was $1,995.)
+  //
+  // ⚠️  This MUST be awaited before calling handleCappingEvent for the referrer
+  //   below, so the DB write completes before the capping check reads fresh data.
+  await User.updateOne(
     { _id: stake.userId?._id || stake.userId },
-    { $set: { cappingEmailSentAt: null, lastCappingReachedAt: new Date() } }
+    { $set: { cappingEmailSentAt: null } }
   ).catch((e) => console.error('handleStakeEvent: failed to reset capping flags:', e?.message));
 
   // ── Batch fetch setting in one cache read ──────────────────
@@ -168,7 +181,9 @@ const handleStakeEvent = async (txHash) => {
     const referrerId = stake.userId.referredBy;
     const referral = require("./referral");
 
-    // Check if referrer has an active stake AND has not reached their capping limit
+    // Check if referrer has an active stake AND has not reached their capping limit.
+    // NOTE: The staker's own capping reset (above) is awaited first, so
+    // handleCappingEvent here always reads up-to-date lastCappingReachedAt.
     const [referrerCapping, referrerActiveStake] = await Promise.all([
       referral.handleCappingEvent(referrerId),
       Stake.findOne({ userId: referrerId, status: DEFAULT_STATUS.ACTIVE }).lean(),
