@@ -20,12 +20,25 @@ const getRewardForDay = async (stakeId, targetDate) => {
   const day = targetDate
     ? moment.tz(targetDate, tz)
     : moment.tz(tz);
-  const startOfDay = day.clone().startOf("day").toDate();
-  const endOfDay   = day.clone().endOf("day").toDate();
+  const startOfDayTz = day.clone().startOf("day").toDate();
+  const endOfDayTz   = day.clone().endOf("day").toDate();
+
+  const utcDay = targetDate
+    ? moment.utc(targetDate)
+    : moment.utc();
+  const startOfDayUtc = utcDay.clone().startOf("day").toDate();
+  const endOfDayUtc   = utcDay.clone().endOf("day").toDate();
+
+  // Guard against any reward created within the last 20 hours for this stake
+  const twentyHoursAgo = moment.utc().subtract(20, "hours").toDate();
 
   const reward = await userStakingReward.findOne({
     stakeId,
-    createdAt: { $gte: startOfDay, $lte: endOfDay },
+    $or: [
+      { createdAt: { $gte: startOfDayTz, $lte: endOfDayTz } },
+      { createdAt: { $gte: startOfDayUtc, $lte: endOfDayUtc } },
+      { createdAt: { $gte: twentyHoursAgo } },
+    ],
   });
   return reward;
 };

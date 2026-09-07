@@ -138,17 +138,18 @@ const stakeRewardCron = async () => {
 
         // ── Preserve the stake's original time-of-day on today's date ─────
         // This keeps dashboard grouping consistent with the stake creation time.
+        const moment = require("moment-timezone");
         const time = {
           hour:        stake.createdAt.getUTCHours(),
           minute:      stake.createdAt.getUTCMinutes(),
           second:      stake.createdAt.getUTCSeconds(),
           millisecond: stake.createdAt.getMilliseconds(),
         };
-        const rewardCreatedAt = momentFormatedWithSetTime(momentTimezone(), time);
+        const rewardCreatedAt = moment.utc().set(time).toDate();
 
         // ── Persist reward + update lastReward in parallel ─────────────────
         // lastReward is a hint for getStakesToAddReward; the authoritative
-        // duplicate guard is the unique index on (stakeId, createdAt).
+        // duplicate guard is getRewardForDay.
         await Promise.all([
           UserStakingReward.create({
             userId:    stake.userId._id,
@@ -158,7 +159,7 @@ const stakeRewardCron = async () => {
           }),
           Stake.updateOne(
             { _id: stake._id },
-            { $set: { lastReward: momentFormated() } }
+            { $set: { lastReward: new Date() } }
           ),
         ]);
 

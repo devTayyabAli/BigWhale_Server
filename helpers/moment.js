@@ -13,11 +13,11 @@ const momentToSubtract = (time, duration) => {
 };
 
 const momentFormated = (date) => {
-  return momentTimezone(date && date).format("YYYY-MM-DDTHH:mm:ss.SSS[+00:00]");
+  return momentTimezone(date && date).format("YYYY-MM-DDTHH:mm:ss.SSSZ");
 };
 
-const momentFormatedWithSetTime = (date,time) => {
-  return momentTimezone(date && date).set(time).format("YYYY-MM-DDTHH:mm:ss.SSS[+00:00]");
+const momentFormatedWithSetTime = (date, time) => {
+  return momentTimezone(date && date).set(time).format("YYYY-MM-DDTHH:mm:ss.SSSZ");
 };
 
 
