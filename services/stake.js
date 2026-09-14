@@ -17,23 +17,6 @@ const { getSettingWithKey } = require("../helpers/setting");
 const createPaginator = require("../helpers/paginate");
 const {momentToAdd, momentFormated, momentToSubtract}=require('../helpers/moment')
 const create = async (payload, response) => {
-  // ── Restake Validation: require new stake to be >= previous stake + 50 BW ──
-  const previousStake = await Stake.findOne({
-    userId: new ObjectId(payload.userId),
-    status: { $in: [DEFAULT_STATUS.ACTIVE, DEFAULT_STATUS.INACTIVE] },
-  }).sort({ createdAt: -1 });
-
-  if (previousStake && Number(previousStake.amount) > 0) {
-    const previousBW = Number(previousStake.amount);
-    const minRequiredBW = previousBW + 50;
-    if (Number(payload.amount) < minRequiredBW) {
-      response.success = false;
-      response.message = `Restake amount must be at least ${minRequiredBW} BW tokens (previous stake: ${previousBW} BW + 50 BW requirement)`;
-      response.status = 400;
-      return response;
-    }
-  }
-
   await Stake.deleteMany({
     userId: new ObjectId(payload.userId),
     status: "pending",
