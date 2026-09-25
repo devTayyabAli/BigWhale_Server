@@ -19,6 +19,7 @@ const rankRouter = require("./rank");
 const tokenExchangeRouter = require("./tokensExchange");
 const supportRouter = require("./supportTickets");
 const bannerRouter = require("./admin/Banner");
+const ownerWalletRouter = require("./admin/ownerWallet");
 
 
 
@@ -48,6 +49,7 @@ router.use("/referral", referralRouter);
 router.use("/transaction", transactionRouter);
 router.use("/support", supportRouter);
 router.use("/admin/banner", bannerRouter);
+router.use("/admin/owner-wallet", ownerWalletRouter);
 
 
 

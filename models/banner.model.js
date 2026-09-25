@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 
 const newsUpdatesSchema = new mongoose.Schema(
     {
+        title: {
+            type: String,
+            default: "",
+        },
         picture: [
             {
                 size:{

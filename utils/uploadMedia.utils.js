@@ -12,8 +12,11 @@ const mediaStorage = multer.diskStorage({
   },
 });
 
-// Multer instance to handle single or multiple file uploads
-const uploadMedia = multer({ storage: mediaStorage }).array("mediaFiles", 4);
+// Multer instance to handle single or multiple file uploads from any field name (mediaFiles, image, etc.)
+const uploadMedia = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+}).any();
 
 module.exports = {
   uploadMedia,

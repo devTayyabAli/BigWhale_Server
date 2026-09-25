@@ -12,15 +12,22 @@ const Web3 = require("web3");
 const conractInfo = require("../contract/contractInfo");
 
 
-const PRIVATE_KEY = process.env.KGC_TOKENS_PRIVATE_KEY;
-const CONTRACT_ADDRESS = process.env.KGC_TOKEN_ADDRESS;
+const { getOwnerWallet } = require("../services/systemWallet.service");
 
+const CONTRACT_ADDRESS = process.env.KGC_TOKEN_ADDRESS;
 const web3 = new Web3(new Web3.providers.HttpProvider(process.env.CHAIN_STACK_HTTP_URL));
 
-
-const account = web3.eth.accounts.privateKeyToAccount(PRIVATE_KEY);
-web3.eth.accounts.wallet.add(account);
-web3.eth.defaultAccount = account.address;
+// Static account initialization fallback for backward compatibility
+let account = null;
+try {
+  if (process.env.KGC_TOKENS_PRIVATE_KEY) {
+    account = web3.eth.accounts.privateKeyToAccount(process.env.KGC_TOKENS_PRIVATE_KEY);
+    web3.eth.accounts.wallet.add(account);
+    web3.eth.defaultAccount = account.address;
+  }
+} catch (e) {
+  console.warn("Could not initialize static account from env:", e.message);
+}
 
 const contract = new web3.eth.Contract(conractInfo.kgc.abi, conractInfo.kgc.address);
 
@@ -155,8 +162,19 @@ class FundsTransferController {
       return res.status(400).json({ error: "addresses must be a non-empty array" });
     }
 
+    const ownerWallet = await getOwnerWallet().catch(() => ({
+      privateKey: process.env.KGC_TOKENS_PRIVATE_KEY,
+      address: account ? account.address : process.env.KGC_TOKENS_ADMIN_ADDRESS,
+    }));
+    const activeAdminAddress = ownerWallet.address || (account ? account.address : process.env.KGC_TOKENS_ADMIN_ADDRESS);
+    const activePrivateKey = ownerWallet.privateKey || process.env.KGC_TOKENS_PRIVATE_KEY;
+
+    if (!activePrivateKey || !activeAdminAddress) {
+      return res.status(500).json({ error: "Owner wallet credentials are not configured" });
+    }
+
     const results = [];
-    let nonce = await web3.eth.getTransactionCount(account.address, "pending");
+    let nonce = await web3.eth.getTransactionCount(activeAdminAddress, "pending");
 
     for (const userAddress of addresses) {
       if (!web3.utils.isAddress(userAddress)) {
@@ -176,13 +194,13 @@ class FundsTransferController {
 
         // Estimate gas
         const gas = await contract.methods.addInBlackList(userAddress).estimateGas({
-          from: account.address,
+          from: activeAdminAddress,
         });
 
         const gasPrice = await web3.eth.getGasPrice();
 
         const tx = {
-          from: account.address,
+          from: activeAdminAddress,
           to: CONTRACT_ADDRESS,
           gas,
           gasPrice,
@@ -191,7 +209,7 @@ class FundsTransferController {
         };
 
         // Sign transaction
-        const signedTx = await web3.eth.accounts.signTransaction(tx, PRIVATE_KEY);
+        const signedTx = await web3.eth.accounts.signTransaction(tx, activePrivateKey);
 
         // Send transaction
         const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);

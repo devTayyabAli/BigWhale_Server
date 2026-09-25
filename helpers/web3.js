@@ -6,6 +6,7 @@ const Transaction = require("../models/transaction.model");
 const PartialWithdrawals = require("../models/partialWithdrawal.model");
 const Stake = require("../models/stake.model");
 const { TRANSACTION_STATUS } = require("../config/constants");
+const { getOwnerWallet } = require("../services/systemWallet.service");
 const getWeb3 = () => {
   const provider = process.env.CHAIN_STACK_HTTP_URL;
   const web3 = new Web3(provider);
@@ -27,6 +28,13 @@ const transferFunds = async (
   if (!toAddress) throw new Error("toAddress is required");
   try {
     const web3 = await getWeb3();
+    const ownerWallet = await getOwnerWallet().catch(() => ({
+      privateKey: process.env.KGC_TOKENS_PRIVATE_KEY,
+      address: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+    }));
+    const adminAddress = ownerWallet.address || process.env.KGC_TOKENS_ADMIN_ADDRESS;
+    const privateKey = ownerWallet.privateKey || process.env.KGC_TOKENS_PRIVATE_KEY;
+
     const cleanAddress = toAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.kgc;
     const methods = await getContractMethods(abi, address);
@@ -36,7 +44,7 @@ const transferFunds = async (
     );
 
     const gasFee = await transferFunc.estimateGas({
-      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+      from: adminAddress,
     });
     const gasPrice = await web3.eth.getGasPrice();
     // Use BigInt to avoid floating-point precision loss on large Wei values
@@ -54,11 +62,11 @@ const transferFunds = async (
       web3.utils.toWei(`${tranferAmount}`, "ether")
     );
     const gasPrice2 = await transferTxFunc.estimateGas({
-      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+      from: adminAddress,
     });
     const funcData = transferTxFunc.encodeABI();
     const rawTransaction = {
-      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+      from: adminAddress,
       // nonce: web3.utils.toHex(nonce)
       gasPrice: web3.utils.toHex(gasPrice),
       gasLimit: web3.utils.toHex(900000),
@@ -67,7 +75,7 @@ const transferFunds = async (
     };
     const signTransaction = await web3.eth.accounts.signTransaction(
       rawTransaction,
-      process.env.KGC_TOKENS_PRIVATE_KEY
+      privateKey
     );
     const receipt = await web3.eth
       .sendSignedTransaction(signTransaction.rawTransaction)
@@ -120,7 +128,10 @@ const getAdminBlnc=async ()=>{
   const web3 = await getWeb3();
   const { abi, address } = CONTRACT_DETAILS.kgc;
   const methods = await getContractMethods(abi, address);
-  const adminAddress=process.env.KGC_TOKENS_ADMIN_ADDRESS
+  const ownerWallet = await getOwnerWallet().catch(() => ({
+    address: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+  }));
+  const adminAddress = ownerWallet.address || process.env.KGC_TOKENS_ADMIN_ADDRESS;
   let blnc = await methods
     .balanceOf(adminAddress)
     .call();
@@ -167,6 +178,13 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
   if (!userAddress) throw new Error("userAddress is required");
   try {
     const web3 = await getWeb3();
+    const ownerWallet = await getOwnerWallet().catch(() => ({
+      privateKey: process.env.KGC_TOKENS_PRIVATE_KEY,
+      address: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+    }));
+    const adminAddress = ownerWallet.address || process.env.KGC_TOKENS_ADMIN_ADDRESS;
+    const privateKey = ownerWallet.privateKey || process.env.KGC_TOKENS_PRIVATE_KEY;
+
     const cleanAddress = userAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.staking;
     const methods = await getContractMethods(abi, address);
@@ -178,7 +196,7 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
     const gasPrice = await web3.eth.getGasPrice();
     const funcData = stakeFunc.encodeABI();
     const rawTransaction = {
-      from: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+      from: adminAddress,
       gasPrice: web3.utils.toHex(gasPrice),
       gasLimit: web3.utils.toHex(900000),
       to: address,
@@ -186,7 +204,7 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
     };
     const signTransaction = await web3.eth.accounts.signTransaction(
       rawTransaction,
-      process.env.KGC_TOKENS_PRIVATE_KEY
+      privateKey
     );
     const receipt = await web3.eth
       .sendSignedTransaction(signTransaction.rawTransaction)
@@ -226,6 +244,10 @@ const estimateTransferNetworkFee = async (toAddress, amount) => {
     const cleanAddress = toAddress?.toLowerCase();
     const { abi, address } = CONTRACT_DETAILS.kgc;
     const methods = await getContractMethods(abi, address);
+    const ownerWallet = await getOwnerWallet().catch(() => ({
+      address: process.env.KGC_TOKENS_ADMIN_ADDRESS,
+    }));
+    const adminAddress = ownerWallet.address || process.env.KGC_TOKENS_ADMIN_ADDRESS;
 
     const transferFunc = methods.transfer(
       cleanAddress,
@@ -233,7 +255,7 @@ const estimateTransferNetworkFee = async (toAddress, amount) => {
     );
 
     const [gasFee, gasPrice, OneUSDC] = await Promise.all([
-      transferFunc.estimateGas({ from: process.env.KGC_TOKENS_ADMIN_ADDRESS }),
+      transferFunc.estimateGas({ from: adminAddress }),
       web3.eth.getGasPrice(),
       getUSDCLivePrice(),
     ]);

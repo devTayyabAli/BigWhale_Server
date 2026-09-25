@@ -2,15 +2,20 @@
 const fs = require("fs");
 const path = require("path");
 const NewsUpdates = require("../models/banner.model");
-FILE_BASE_URL = "https://api.kgc.world/uploads/media"
-// FILE_BASE_URL = "http://localhost:8000/uploads/media"
-
+function getFileBaseUrl(req) {
+    if (process.env.MEDIA_BASE_URL) return process.env.MEDIA_BASE_URL;
+    if (process.env.BASE_URL) return `${process.env.BASE_URL}/uploads/media`;
+    if (req && req.protocol && req.get("host")) {
+        return `${req.protocol}://${req.get("host")}/uploads/media`;
+    }
+    return "https://api.bwscan.io/uploads/media";
+}
 
 class NewsBannerController {
     /**
      * @param req request body
      * @param res callback response object
-     * @description This method is to create a new support ticket
+     * @description This method is to create or update news banner
      */
     static async createNewsBanner(req, res) {
     let response = {
@@ -27,14 +32,14 @@ class NewsBannerController {
             return res.status(response.status).json(response);
         }
 
-        // We only expect one file, so if more are uploaded, it's an error.
+        // We only expect one file per banner entry
         if (req.files.length > 1) {
-            response.message = "Too many files uploaded. Only one banner image is allowed.";
+            response.message = "Too many files uploaded. Only one banner image is allowed per upload.";
             response.status = 400;
             return res.status(response.status).json(response);
         }
 
-        // Validate file size (assuming `multer` has already enforced the limits)
+        // Validate file size
         const file = req.files[0];
         const maxSizeInMB = 50;
         const fileSizeInMB = file.size / (1024 * 1024);
@@ -46,29 +51,35 @@ class NewsBannerController {
         }
 
         // Generate URL for the uploaded file
-        const baseUrl = FILE_BASE_URL; // Make sure FILE_BASE_URL is defined
+        const baseUrl = getFileBaseUrl(req);
         const mediaFiles = [{
             name: file.filename,
             size: file.size,
             url: `${baseUrl}/${file.filename}`,
         }];
 
-        // Find and update the existing banner, or create a new one if it doesn't exist
-        const filter = {}; // An empty filter will match the first document
-        const update = { picture: mediaFiles };
-        const options = {
-            upsert: true, // Create a new document if one doesn't exist
-            new: true, // Return the modified document rather than the original
-            runValidators: true, // Ensure schema validators are run
+        const title = req.body?.title || "";
+        const bannerPayload = {
+            picture: mediaFiles,
+            ...(title ? { title } : {}),
         };
 
-        const updatedBanner = await NewsUpdates.findOneAndUpdate(filter, update, options);
+        let resultBanner;
+        if (req.body?.id || req.body?._id) {
+            resultBanner = await NewsUpdates.findByIdAndUpdate(
+                req.body.id || req.body._id,
+                bannerPayload,
+                { new: true }
+            );
+        } else {
+            resultBanner = await NewsUpdates.create(bannerPayload);
+        }
 
         response = {
             success: true,
-            message: "News Banner updated successfully",
-            data: updatedBanner,
-            status: 200, // 200 OK since it could be an update
+            message: "News Banner saved successfully",
+            data: resultBanner,
+            status: 200,
         };
 
     } catch (error) {
@@ -102,7 +113,7 @@ class NewsBannerController {
         };
 
         try {
-            const tickets = await NewsUpdates.find();
+            const tickets = await NewsUpdates.find().sort({ createdAt: -1 });
             response = {
                 success: true,
                 message: "News Banner fetched successfully",
