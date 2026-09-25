@@ -32,14 +32,7 @@ class NewsBannerController {
             return res.status(response.status).json(response);
         }
 
-        // We only expect one file per banner entry
-        if (req.files.length > 1) {
-            response.message = "Too many files uploaded. Only one banner image is allowed per upload.";
-            response.status = 400;
-            return res.status(response.status).json(response);
-        }
-
-        // Validate file size
+        // Pick the uploaded banner image
         const file = req.files[0];
         const maxSizeInMB = 50;
         const fileSizeInMB = file.size / (1024 * 1024);

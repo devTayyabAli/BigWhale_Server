@@ -8,7 +8,7 @@ const socket = require('../helpers/sockets');
 const {
   DEFAULT_STATUS, SEARCH_KEY
 } = require("../config/constants");
-const moment = require('moment');
+const moment = require('moment-timezone');
 const TokenExchange = require("../models/tokenExchange.model");
 const TeamMember = require("../models/teamMember.model");
 const { default: mongoose } = require("mongoose");
@@ -16,50 +16,37 @@ const { default: mongoose } = require("mongoose");
 const statistics = async (search, startDate, endDate) => {
   try {
     let matchQuery = {};
+    const tz = process.env.DEFAULT_TIMEZONE || "Asia/Karachi";
 
     if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      end.setHours(23 + 5, 59, 59, 999);
       matchQuery.createdAt = {
-        $gte: new Date(start),
-        $lte: new Date(end),
+        $gte: moment.tz(startDate, "YYYY-MM-DD", tz).startOf("day").toDate(),
+        $lte: moment.tz(endDate, "YYYY-MM-DD", tz).endOf("day").toDate(),
       };
-    } else {
-      if (search === SEARCH_KEY.DAILY) {
-        matchQuery = {
-          $expr: {
-            $eq: [
-              { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-              moment().format("YYYY-MM-DD"),
-            ],
-          },
-        };
-      } else if (search === SEARCH_KEY.WEEKLY) {
-        const startOfWeek = moment().startOf("week").format("YYYY-MM-DD");
-        const endOfWeek = moment().endOf("week").format("YYYY-MM-DD");
-        matchQuery.createdAt = {
-          $gte: new Date(startOfWeek),
-          $lte: new Date(endOfWeek),
-        };
-      } else if (search === SEARCH_KEY.MONTHLY) {
-        const startOfMonth = moment().startOf("month").format("YYYY-MM-DD");
-        const endOfMonth = moment().endOf("month").format("YYYY-MM-DD");
-        matchQuery.createdAt = {
-          $gte: new Date(startOfMonth),
-          $lte: new Date(endOfMonth),
-        };
-      } else {
-        matchQuery = {
-          $expr: {
-            $eq: [
-              { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-              moment().format("YYYY-MM-DD"),
-            ],
-          },
-        };
-      }
+    } else if (search === SEARCH_KEY.DAILY) {
+      matchQuery.createdAt = {
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
+      };
+    } else if (search === SEARCH_KEY.WEEKLY) {
+      matchQuery.createdAt = {
+        $gte: moment().tz(tz).startOf("isoWeek").toDate(),
+        $lte: moment().tz(tz).endOf("isoWeek").toDate(),
+      };
+    } else if (search === SEARCH_KEY.MONTHLY) {
+      matchQuery.createdAt = {
+        $gte: moment().tz(tz).startOf("month").toDate(),
+        $lte: moment().tz(tz).endOf("month").toDate(),
+      };
+    } else if (search === "all") {
+      matchQuery = {};
+    } else if (!search) {
+      matchQuery.createdAt = {
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
+      };
     }
+
     const users = await User.countDocuments({ role: { $ne: "admin" } });
 
     const globalTurnOver = await Stake.aggregate([
@@ -72,17 +59,23 @@ const statistics = async (search, startDate, endDate) => {
           as: "userDetails",
         },
       },
-      { $unwind: "$userDetails" },
-      { $match: { "userDetails.status": "active", "status": "active" } },
+      { $unwind: { path: "$userDetails", preserveNullAndEmptyArrays: true } },
+      { $match: { status: "active" } },
       {
         $group: {
           _id: null,
           totalAmount: {
             $sum: {
               $cond: [
-                { $ifNull: ["$transactionId", false] },
+                { $isNumber: "$amount" },
                 "$amount",
-                0,
+                {
+                  $cond: [
+                    { $regexMatch: { input: { $toString: "$amount" }, regex: /^[0-9.]+$/ } },
+                    { $toDouble: "$amount" },
+                    0,
+                  ],
+                },
               ],
             },
           },
@@ -100,8 +93,7 @@ const statistics = async (search, startDate, endDate) => {
           as: "userDetails",
         },
       },
-      { $unwind: "$userDetails" },
-      { $match: { "userDetails.status": "active" } },
+      { $unwind: { path: "$userDetails", preserveNullAndEmptyArrays: true } },
       {
         $group: {
           _id: null,
@@ -109,9 +101,15 @@ const statistics = async (search, startDate, endDate) => {
           totalAmount: {
             $sum: {
               $cond: [
-                { $regexMatch: { input: "$amount", regex: /^[0-9.]+$/ } },
-                { $toDouble: "$amount" },
-                0,
+                { $isNumber: "$amount" },
+                "$amount",
+                {
+                  $cond: [
+                    { $regexMatch: { input: { $toString: "$amount" }, regex: /^[0-9.]+$/ } },
+                    { $toDouble: "$amount" },
+                    0,
+                  ],
+                },
               ],
             },
           },
@@ -136,13 +134,26 @@ const statistics = async (search, startDate, endDate) => {
           as: "userDetails",
         },
       },
-      { $unwind: "$userDetails" },
-      { $match: { "userDetails.status": "active" } },
+      { $unwind: { path: "$userDetails", preserveNullAndEmptyArrays: true } },
       {
         $group: {
           _id: null,
           totalCount: { $sum: 1 },
-          totalAmount: { $sum: "$amount" },
+          totalAmount: {
+            $sum: {
+              $cond: [
+                { $isNumber: "$amount" },
+                "$amount",
+                {
+                  $cond: [
+                    { $regexMatch: { input: { $toString: "$amount" }, regex: /^[0-9.]+$/ } },
+                    { $toDouble: "$amount" },
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
         },
       },
       {
@@ -163,15 +174,10 @@ const statistics = async (search, startDate, endDate) => {
         ? totalUserStakeAggregate[0]
         : { totalCount: 0, totalAmount: 0 };
 
-    // const totalReward = {
-    //   totalCount: totalRewardDistribute.totalCount + totalUserStake.totalCount,
-    //   totalAmount: totalRewardDistribute.totalAmount + totalUserStake.totalAmount,
-    // };
-
     return { users, globalTurnOver, totalRewardDistribute, totalUserStake };
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in statistics service:", err);
+    throw err;
   }
 };
 
@@ -605,55 +611,53 @@ const getStakeHistory = async (status, stakeId, fromDate, toDate, page, limit) =
 // };
 
 
-const getTodayStakeReward = async (page, limit, startDate, endDate, search, userName) => {
+const getTodayStakeReward = async (page = 1, limit = 10, startDate, endDate, search, userName) => {
   try {
-    const skip = (page - 1) * parseInt(limit);
-    const limitValue = parseInt(limit);
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const limitValue = parseInt(limit, 10);
+    const tz = process.env.DEFAULT_TIMEZONE || "Asia/Karachi";
 
-    // Match against UserStakeReward.createdAt (the daily reward payout date)
     let matchStage = {};
 
     if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      end.setHours(23 + 5, 59, 59, 999);
-      matchStage.createdAt = { $gte: start, $lte: end };
+      matchStage.createdAt = {
+        $gte: moment.tz(startDate, "YYYY-MM-DD", tz).startOf("day").toDate(),
+        $lte: moment.tz(endDate, "YYYY-MM-DD", tz).endOf("day").toDate(),
+      };
     } else if (search === SEARCH_KEY.DAILY) {
       matchStage.createdAt = {
-        $gte: moment().startOf('day').toDate(),
-        $lte: moment().endOf('day').toDate(),
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
       };
     } else if (search === SEARCH_KEY.WEEKLY) {
       matchStage.createdAt = {
-        $gte: moment().startOf('isoWeek').toDate(),
-        $lte: moment().endOf('isoWeek').toDate(),
+        $gte: moment().tz(tz).startOf("isoWeek").toDate(),
+        $lte: moment().tz(tz).endOf("isoWeek").toDate(),
       };
     } else if (search === SEARCH_KEY.MONTHLY) {
       matchStage.createdAt = {
-        $gte: moment().startOf('month').toDate(),
-        $lte: moment().endOf('month').toDate(),
+        $gte: moment().tz(tz).startOf("month").toDate(),
+        $lte: moment().tz(tz).endOf("month").toDate(),
       };
-    } else {
-      // Default: today
+    } else if (search === "all") {
+      matchStage = {};
+    } else if (!search) {
       matchStage.createdAt = {
-        $gte: moment().startOf('day').toDate(),
-        $lte: moment().endOf('day').toDate(),
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
       };
     }
 
-    // Optional username filter — resolve to userId first
     if (userName) {
-      const user = await User.findOne({ userName: { $regex: userName, $options: 'i' } });
-      if (!user) {
+      const users = await User.find({ userName: { $regex: userName, $options: "i" } }).select("_id");
+      if (!users || !users.length) {
         return { userStakeReward: [], totalCount: 0, totalStakeAmount: 0 };
       }
-      matchStage.userId = user._id;
+      matchStage.userId = { $in: users.map(u => u._id) };
     }
 
-    // Query UserStakeReward directly — each row is one daily reward payout
     const aggregationPipeline = [
       { $match: matchStage },
-      // Join user for userName display
       {
         $lookup: {
           from: "users",
@@ -663,7 +667,6 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
         }
       },
       { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
-      // Join stake for the principal amount and status
       {
         $lookup: {
           from: "stakes",
@@ -681,10 +684,10 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
             { $limit: limitValue },
             {
               $project: {
-                _id: 0,
+                _id: 1,
                 userName: "$user.userName",
-                rewardAmount: "$amount",       // daily reward paid out
-                stakeAmount: "$stake.amount",  // principal (for reference)
+                rewardAmount: "$amount",
+                stakeAmount: "$stake.amount",
                 date: "$createdAt",
                 status: "$stake.status"
               }
@@ -695,7 +698,7 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
               $group: {
                 _id: null,
                 totalCount: { $sum: 1 },
-                totalStakeAmount: { $sum: "$amount" }  // sum of reward payouts
+                totalStakeAmount: { $sum: "$amount" }
               }
             }
           ]
@@ -704,76 +707,72 @@ const getTodayStakeReward = async (page, limit, startDate, endDate, search, user
     ];
 
     const result = await UserStakeReward.aggregate(aggregationPipeline);
-    const data = result[0].data;
-    const metadata = result[0].metadata[0];
+    const data = result[0]?.data || [];
+    const metadata = result[0]?.metadata?.[0] || { totalCount: 0, totalStakeAmount: 0 };
 
     return {
-      userStakeReward: data || [],
-      totalCount: metadata ? metadata.totalCount : 0,
-      totalStakeAmount: metadata ? metadata.totalStakeAmount : 0
+      userStakeReward: data,
+      totalCount: metadata.totalCount || 0,
+      totalStakeAmount: metadata.totalStakeAmount || 0
     };
 
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in getTodayStakeReward service:", err);
+    throw err;
   }
 };
 
 const getTodaySaleDetails = async (
-  page,
-  limit,
+  page = 1,
+  limit = 10,
   startDate,
   endDate,
   search,
   userName
 ) => {
   try {
-    const skip = (page - 1) * limit;
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const limitValue = parseInt(limit, 10);
+    const tz = process.env.DEFAULT_TIMEZONE || "Asia/Karachi";
     let matchStage = { status: "completed", type: "sell" };
 
-    /* ------------------------------------------------------------------
-       Helper: treat an ISO‑like YYYY‑MM‑DD string as Dubai local time.
-    ------------------------------------------------------------------ */
-    const dubaiRange = (s, e) => ({
-      $gte: moment.tz(s, "YYYY-MM-DD", "Asia/Karachi").startOf("day").toDate(),
-      $lte: moment.tz(e, "YYYY-MM-DD", "Asia/Karachi").endOf("day").toDate(),
-    });
-
-    /* ------------------------------------------------------------------
-       1. Build createdAt range according to query.
-    ------------------------------------------------------------------ */
     if (startDate && endDate) {
-      matchStage.createdAt = dubaiRange(startDate, endDate);
+      matchStage.createdAt = {
+        $gte: moment.tz(startDate, "YYYY-MM-DD", tz).startOf("day").toDate(),
+        $lte: moment.tz(endDate, "YYYY-MM-DD", tz).endOf("day").toDate(),
+      };
     } else if (search === SEARCH_KEY.DAILY) {
-      const today = moment().tz("Asia/Karachi").format("YYYY-MM-DD");
-      matchStage.createdAt = dubaiRange(today, today);
+      matchStage.createdAt = {
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
+      };
     } else if (search === SEARCH_KEY.WEEKLY) {
       matchStage.createdAt = {
-        $gte: moment().tz("Asia/Karachi").startOf("isoWeek").toDate(),
-        $lte: moment().tz("Asia/Karachi").endOf("isoWeek").toDate(),
+        $gte: moment().tz(tz).startOf("isoWeek").toDate(),
+        $lte: moment().tz(tz).endOf("isoWeek").toDate(),
       };
     } else if (search === SEARCH_KEY.MONTHLY) {
       matchStage.createdAt = {
-        $gte: moment().tz("Asia/Karachi").startOf("month").toDate(),
-        $lte: moment().tz("Asia/Karachi").endOf("month").toDate(),
+        $gte: moment().tz(tz).startOf("month").toDate(),
+        $lte: moment().tz(tz).endOf("month").toDate(),
+      };
+    } else if (search === "all") {
+      // all time
+    } else if (!search) {
+      matchStage.createdAt = {
+        $gte: moment().tz(tz).startOf("day").toDate(),
+        $lte: moment().tz(tz).endOf("day").toDate(),
       };
     }
 
-    /* ------------------------------------------------------------------
-       2. Optional user filter.
-    ------------------------------------------------------------------ */
     if (userName) {
-      const user = await User.findOne({ userName: { $regex: userName, $options: 'i' } });
-      if (!user) {
+      const users = await User.find({ userName: { $regex: userName, $options: "i" } }).select("_id");
+      if (!users || !users.length) {
         return { salesData: [], totalCount: 0, totalSaleAmount: 0 };
       }
-      matchStage.userId = user._id;
+      matchStage.userId = { $in: users.map(u => u._id) };
     }
 
-    /* ------------------------------------------------------------------
-       3. Aggregate totals.
-    ------------------------------------------------------------------ */
     const [{ totalSaleAmount = 0 } = {}] = await TokenExchange.aggregate([
       { $match: matchStage },
       { $group: { _id: null, totalSaleAmount: { $sum: "$amount" } } },
@@ -781,12 +780,9 @@ const getTodaySaleDetails = async (
 
     const totalCount = await TokenExchange.countDocuments(matchStage);
 
-    /* ------------------------------------------------------------------
-       4. Paged result with Dubai‑formatted date.
-    ------------------------------------------------------------------ */
     const salesData = await TokenExchange.aggregate([
       { $match: matchStage },
-      { $sort: { createdAt: 1 } },
+      { $sort: { createdAt: -1 } },
       { $skip: skip },
       { $limit: limitValue },
       {
@@ -797,19 +793,20 @@ const getTodaySaleDetails = async (
           as: "user",
         },
       },
-      { $unwind: "$user" },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
       {
         $project: {
-          _id: 0,
+          _id: 1,
           userId: 1,
           userName: "$user.userName",
           totalSaleAmount: "$amount",
-          createdAtUtc: "$createdAt",         // raw UTC if you still need it
+          createdAt: "$createdAt",
+          createdAtUtc: "$createdAt",
           createdAtDubai: {
             $dateToString: {
               format: "%Y-%m-%d %H:%M:%S",
               date: "$createdAt",
-              timezone: "Asia/Karachi",
+              timezone: tz,
             },
           },
         },
@@ -818,7 +815,7 @@ const getTodaySaleDetails = async (
 
     return { salesData, totalCount, totalSaleAmount };
   } catch (err) {
-    console.error(err);
+    console.error("Error in getTodaySaleDetails service:", err);
     throw err;
   }
 };

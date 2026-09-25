@@ -44,12 +44,12 @@ router.use("/withdrawal", withdrawalRouter);
 router.use("/setting", settingRouter);
 router.use("/fundsTransfer", fundsTransferRouter);
 router.use("/kyc", kycRouter);
+router.use("/admin/owner-wallet", ownerWalletRouter);
+router.use("/admin/banner", bannerRouter);
 router.use("/admin", adminAuthRouter);
 router.use("/referral", referralRouter);
 router.use("/transaction", transactionRouter);
 router.use("/support", supportRouter);
-router.use("/admin/banner", bannerRouter);
-router.use("/admin/owner-wallet", ownerWalletRouter);
 
 
 

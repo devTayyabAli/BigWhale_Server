@@ -1,4 +1,13 @@
-const Joi = require("@hapi/joi");
+let Joi;
+try {
+  Joi = require("@hapi/joi");
+} catch (e) {
+  try {
+    Joi = require(".pnpm/node_modules/@hapi/joi");
+  } catch (e2) {
+    Joi = require("joi");
+  }
+}
 
 const signupValidation = {
   body: {

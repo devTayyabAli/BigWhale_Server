@@ -94,13 +94,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 
+// ── Ensure Upload Directories Exist ──────────────────────────────────
+const mediaUploadDir = path.join(__dirname, 'uploads', 'media');
+const imagesUploadDir = path.join(__dirname, 'uploads', 'images');
+if (!fs.existsSync(mediaUploadDir)) fs.mkdirSync(mediaUploadDir, { recursive: true });
+if (!fs.existsSync(imagesUploadDir)) fs.mkdirSync(imagesUploadDir, { recursive: true });
+
 // ── Static Files ──────────────────────────────────────────────────────
 app.use(express.static('assets'));
-app.use('/uploads/images/', express.static(path.join(__dirname, 'uploads', 'images'), {
+app.use('/uploads/images/', express.static(imagesUploadDir, {
   maxAge: '7d',       // Cache static images for 7 days
   etag: true,
 }));
-app.use('/uploads/media/', express.static(path.join(__dirname, 'uploads', 'media'), {
+app.use('/uploads/media/', express.static(mediaUploadDir, {
   maxAge: '7d',
   etag: true,
 }));

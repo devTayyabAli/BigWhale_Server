@@ -1018,14 +1018,16 @@ const getTodayStakeReward = async (request, response) => {
     return response.status(200).json({
       success: true,
       message: "Details found successfully.",
-      userStakeReward,
-      totalStakeAmount,
-      paginate: createPaginator.paginate(totalCount, limit, page),
-
+      userStakeReward: userStakeReward || [],
+      totalStakeAmount: totalStakeAmount || 0,
+      paginate: createPaginator.paginate(totalCount || 0, limit || 10, page || 1),
     });
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in getTodayStakeReward: ", err);
+    return response.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
   }
 };
 
@@ -1036,14 +1038,16 @@ const getTodaySale = async (request, response) => {
     return response.status(200).json({
       success: true,
       message: "Details found successfully.",
-      salesData,
-      totalSaleAmount,
-      paginate: createPaginator.paginate(totalCount, limit, page),
-
+      salesData: salesData || [],
+      totalSaleAmount: totalSaleAmount || 0,
+      paginate: createPaginator.paginate(totalCount || 0, limit || 10, page || 1),
     });
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in getTodaySale: ", err);
+    return response.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
   }
 };
 
@@ -1055,13 +1059,15 @@ const getTodayUsers = async (request, response) => {
     return response.status(200).json({
       success: true,
       message: "Details found successfully.",
-      usersData,
-      paginate: createPaginator.paginate(totalCount, limit, page),
-
+      usersData: usersData || [],
+      paginate: createPaginator.paginate(totalCount || 0, limit || 10, page || 1),
     });
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in getTodayUsers: ", err);
+    return response.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
   }
 };
 
@@ -1074,13 +1080,15 @@ const getTodayBannedUsers = async (request, response) => {
     return response.status(200).json({
       success: true,
       message: "Details found successfully.",
-      usersData,
-      paginate: createPaginator.paginate(totalCount, limit, page),
-
+      usersData: usersData || [],
+      paginate: createPaginator.paginate(totalCount || 0, limit || 10, page || 1),
     });
   } catch (err) {
-    console.log(err);
-    return err;
+    console.error("Error in getTodayBannedUsers: ", err);
+    return response.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
   }
 };
 
