@@ -1,9 +1,15 @@
 const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
 
 // Configure storage
 const mediaStorage = multer.diskStorage({
   destination(req, file, cb) {
-    cb(null, `${__dirname}/../uploads/media`);
+    const uploadDir = path.join(__dirname, "../uploads/media");
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
   },
   filename(req, file, cb) {
     const ext = file.originalname.split(".");
