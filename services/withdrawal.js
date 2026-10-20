@@ -13,7 +13,9 @@ const {
   TRANSACTION_TYPES,
   OTHER_REWARD,
   SETTING,
+  FAST_TRACK,
 } = require("../config/constants.js");
+const fastTrack = require("./fastTrack");
 const Transaction = require("../models/transaction.model.js");
 const socket = require("../helpers/sockets");
 const { transferFunds, getWithdrawalAmountFromContract, getAdminBlnc, stakeTokenOnChain, estimateTransferNetworkFee } = require("../helpers/web3.js");
@@ -24,8 +26,104 @@ const Stake = require("../models/stake.model.js");
 const salaryRankService = require("./salaryRank");
 const { getSettingWithKey } = require("../helpers/setting");
 
+/**
+ * 2X Fast-Track universal withdrawal rules (apply to every income type):
+ *  • exactly FAST_TRACK.WITHDRAWAL_CHUNK (10 BW) per withdrawal
+ *  • MAX_WITHDRAWALS_PER_WINDOW (1) per rolling WITHDRAWAL_WINDOW_HOURS (24h)
+ *  • 1 unused direct-joining credit per withdrawal
+ *  • quota/credit are consumed only when the withdrawal is CONFIRMED
+ *    (handleWithdrawalEvent / makePartialPayment), never at request time,
+ *    so a cancelled wallet transaction costs the user nothing.
+ *
+ * The chunk rule is validated on `fiatAmount` (USD value the user typed)
+ * when the client sends it, otherwise on `amount` (token quantity).
+ */
+const validateFastTrackWithdrawal = async (user, ruleAmount) => {
+  const chunk = FAST_TRACK.WITHDRAWAL_CHUNK;
+  const maxPerRequest = chunk * FAST_TRACK.MAX_WITHDRAWALS_PER_WINDOW;
+
+  if (!ruleAmount || ruleAmount <= 0) {
+    return "Invalid withdrawal amount.";
+  }
+  const chunks = Math.round(ruleAmount / chunk);
+  if (chunks < 1 || Math.abs(ruleAmount - chunks * chunk) > FAST_TRACK.AMOUNT_TOLERANCE) {
+    return `Withdrawal is only allowed in chunks of ${chunk} BW.`;
+  }
+  if (ruleAmount > maxPerRequest + FAST_TRACK.AMOUNT_TOLERANCE) {
+    return `Only ${FAST_TRACK.MAX_WITHDRAWALS_PER_WINDOW} withdrawal of ${chunk} BW is allowed per ${FAST_TRACK.WITHDRAWAL_WINDOW_HOURS} hours.`;
+  }
+
+  // Rolling window — based on the last CONFIRMED withdrawal.
+  const remainingMs = fastTrack.getWithdrawalWindowRemainingMs(user.lastWithdrawalAt);
+  if (remainingMs > 0) {
+    const h = Math.floor(remainingMs / 3600000);
+    const m = Math.ceil((remainingMs % 3600000) / 60000);
+    return `Withdrawal limit reached. Next ${chunk} BW withdrawal available in ${h}h ${m}m.`;
+  }
+
+  // In-flight guard — one fast-track withdrawal at a time.
+  const windowStart = new Date(Date.now() - FAST_TRACK.WITHDRAWAL_WINDOW_HOURS * 3600000);
+  const staleBefore = new Date(Date.now() - FAST_TRACK.PENDING_WITHDRAWAL_STALE_MINUTES * 60000);
+
+  // Drop abandoned requests (user never signed the wallet tx).
+  await Withdrawal.deleteMany({
+    userId: user._id,
+    status: DEFAULT_STATUS.PENDING,
+    payoutPercentage: 80,
+    transactionId: null,
+    createdAt: { $lt: staleBefore },
+  });
+
+  const inFlight = await Withdrawal.findOne({
+    userId: user._id,
+    status: DEFAULT_STATUS.PENDING,
+    payoutPercentage: 80,
+    createdAt: { $gte: windowStart },
+  })
+    .select("transactionId createdAt")
+    .lean();
+
+  if (inFlight) {
+    if (inFlight.transactionId) {
+      return "Your previous withdrawal is still being confirmed on-chain. Please wait for it to complete.";
+    }
+    const waitMin = Math.ceil(
+      (new Date(inFlight.createdAt).getTime() + FAST_TRACK.PENDING_WITHDRAWAL_STALE_MINUTES * 60000 - Date.now()) / 60000
+    );
+    return `A withdrawal request is already in progress. Complete it in your wallet or try again in ${Math.max(1, waitMin)} minute(s).`;
+  }
+
+  // 1 new joining credit per chunk.
+  const available = Number(user.unusedDirectCount || 0);
+  if (available < chunks) {
+    return `Withdrawal requires 1 new direct joining (5 BW stake) per ${chunk} BW (Required: ${chunks}, Available: ${available}).`;
+  }
+
+  return null;
+};
+
 const create = async (req, response) => {
-  const { userId, amount } = req.body;
+  const { userId, amount, fiatAmount } = req.body;
+
+  const user = await User.findById(userId);
+  if (!user) {
+    response.success = false;
+    response.message = "User not found";
+    response.status = 404;
+    return response;
+  }
+
+  // ── 2X Fast-Track Universal Withdrawal Validations ────────────────
+  const ruleAmount = Number(fiatAmount ?? amount);
+  const ruleError = await validateFastTrackWithdrawal(user, ruleAmount);
+  if (ruleError) {
+    response.success = false;
+    response.message = ruleError;
+    response.status = 400;
+    return response;
+  }
+  const requiredJoinings = Math.round(ruleAmount / FAST_TRACK.WITHDRAWAL_CHUNK);
+
   const { stakingAmount, otherRewardAmount } =
     await calculateTotalWithdrawalAmount(new ObjectId(userId));
   const partialWithdrawalAmountFixed = Number((Number(Number(amount)?.toFixed(6)) - Number(Number(stakingAmount)?.toFixed(6)))?.toFixed(6))
@@ -34,6 +132,7 @@ const create = async (req, response) => {
   const withdrawal = new Withdrawal({
     userId,
     payoutPercentage: 80,
+    requiredJoinings,
   });
   const adminBlnc = await getAdminBlnc()
   //**** if there is no staking reward***//
@@ -79,6 +178,10 @@ const create = async (req, response) => {
   }
   withdrawal.amount = withdrawalAmountFromContract * 0.8;
   await withdrawal.save();
+
+  // NOTE: the joining credit + 24h quota are consumed in handleWithdrawalEvent
+  // once the on-chain transaction is confirmed — not here.
+
   response.success = true;
   response.message = "Withdrawal added successfully";
   response.status = 201;
@@ -132,7 +235,11 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
     return response;
   }
 
-  await updatePartialWithdrawal(receipt?.transactionHash)
+  await updatePartialWithdrawal(receipt?.transactionHash);
+
+  // Server-side transfer succeeded → consume the joining credit + 24h quota now.
+  await consumeQuotaOnce(withdrawal, userId);
+
   response.success = true;
   response.message = "Withdrawal added successfully";
   response.status = 201;
@@ -141,6 +248,33 @@ const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
 };
 const createPartialWithdrawal = async (payload) => {
   return await PartialWithdrawal.create(payload);
+};
+
+/**
+ * Consume the fast-track quota (1 joining credit + 24h window) exactly once
+ * per withdrawal. Idempotent via Withdrawal.fastTrackQuotaConsumedAt so a
+ * re-delivered blockchain event can never double-charge the user.
+ */
+const consumeQuotaOnce = async (withdrawal, userId) => {
+  const joinings = Number(withdrawal?.requiredJoinings || 1);
+  const uid = userId || withdrawal?.userId?._id || withdrawal?.userId;
+  if (!uid) return;
+
+  if (withdrawal?._id) {
+    const res = await Withdrawal.updateOne(
+      { _id: withdrawal._id, fastTrackQuotaConsumedAt: null },
+      { $set: { fastTrackQuotaConsumedAt: new Date() } }
+    );
+    if (res.matchedCount === 0) {
+      // Not matched: either already consumed, or the doc was never persisted
+      // (partial-only path builds the Withdrawal in memory). Only skip when
+      // it exists in DB (= already consumed).
+      const exists = await Withdrawal.exists({ _id: withdrawal._id });
+      if (exists) return;
+    }
+  }
+
+  await fastTrack.consumeWithdrawalQuota(uid, joinings);
 };
 
 const completeWithdrawal = async (req, response) => {
@@ -232,6 +366,13 @@ const handleWithdrawalEvent = async (txHash) => {
     if (withdrawal) {
       const payoutPct = withdrawal.payoutPercentage ?? 80;
       const payoutRatio = payoutPct / 100;
+
+      // ── 2X Fast-Track: withdrawal CONFIRMED → consume joining credit + 24h quota
+      if (payoutPct === 80) {
+        await consumeQuotaOnce(withdrawal, withdrawal.userId).catch((err) =>
+          console.error("handleWithdrawalEvent: quota consumption failed:", err?.message)
+        );
+      }
 
       // ── Salary Rank distribution (20% of total withdrawal) ─────────────
       // The full withdrawal amount before the split = amount / payoutRatio
@@ -741,5 +882,7 @@ module.exports = {
   getPendingPartialWithdrawals,
   totalPartialWithdrawalAmount,
   calculateTodayBonus,
-  getWithdrawalHistoryByID
+  getWithdrawalHistoryByID,
+  consumeQuotaOnce,
+  validateFastTrackWithdrawal,
 };

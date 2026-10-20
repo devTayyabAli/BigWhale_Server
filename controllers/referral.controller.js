@@ -16,6 +16,7 @@ const withdrawal = require("../services/withdrawal");
 const { ObjectId } = require("mongoose").Types;
 const stakeCron = require("../cron/incomeReward");
 const { calculateTotalWithdrawalAmount } = require('../services/withdrawal')
+const fastTrack = require("../services/fastTrack");
 /**
  * Get Drops
  *
@@ -61,7 +62,8 @@ const getReferralStats = async (request, response) => {
       todayBonus,
       todayTeam,
       withdrawalInfo,
-      userDetail
+      userDetail,
+      fastTrackDirectCount,
     ] = await Promise.all([
       teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
       teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
@@ -74,7 +76,9 @@ const getReferralStats = async (request, response) => {
       withdrawal.calculateTodayBonus(_id),
       teamId ? referral.numOfReferralsByDate(teamId) : Promise.resolve(0),
       calculateTotalWithdrawalAmount(_id),
-      User.findById(_id).select("userRankId").lean()
+      User.findById(_id).select("userRankId").lean(),
+      // 2X Fast-Track: directs that have actually staked (drives 2X unlock + ranks)
+      fastTrack.countStakedDirects(_id).catch(() => 0),
     ]);
 
     const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
@@ -83,6 +87,8 @@ const getReferralStats = async (request, response) => {
     return response.status(HTTP_STATUS_CODE.OK).json({
       directReferral,
       activeDirectReferrals,
+      fastTrackDirectCount,
+      fastTrackNextRankTarget: fastTrack.getNextRankTarget(fastTrackDirectCount),
       pendingDirectReferrals,
       directReferralBussiness,
       downlineReferral,

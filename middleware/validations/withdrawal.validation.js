@@ -5,6 +5,8 @@ const createWithdrawalValidation = (req, res, next) => {
     const schema = Joi.object({
       userId: Joi.string().length(24).hex().required(),
       amount: Joi.number().positive().required(),
+      // USD value typed by the user — the 10 BW chunk rule is validated on this
+      fiatAmount: Joi.number().positive().optional(),
     });
 
     const { error } = schema.validate(req.body, { abortEarly: false });

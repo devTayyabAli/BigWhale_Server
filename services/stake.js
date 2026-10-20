@@ -7,7 +7,10 @@ const {
   TRANSACTION_STATUS,
   OTHER_REWARD,
   SETTING,
+  STAKE_TYPE,
+  FAST_TRACK,
 } = require("../config/constants");
+const fastTrack = require("./fastTrack");
 const socket = require("../helpers/sockets");
 const Transaction = require("../models/transaction.model");
 const moment = require("moment");
@@ -17,11 +20,27 @@ const { getSettingWithKey } = require("../helpers/setting");
 const createPaginator = require("../helpers/paginate");
 const {momentToAdd, momentFormated, momentToSubtract}=require('../helpers/moment')
 const create = async (payload, response) => {
+  // ── 2X Fast-Track: every new stake must be exactly 5 BW ──────────────
+  // The client sends `fiatAmount` (USD value typed by the user) alongside
+  // `amount` (token quantity). Validate on fiatAmount when present so a
+  // non-1:1 token price can never break the rule; fall back to amount.
+  const ruleAmount = Number(payload.fiatAmount ?? payload.amount);
+  if (!fastTrack.isFixedStakeAmount(ruleAmount)) {
+    response.success = false;
+    response.message = `2X Fast-Track stake must be exactly ${FAST_TRACK.STAKE_AMOUNT} BW (received ${ruleAmount}).`;
+    response.status = 400;
+    return response;
+  }
+
   await Stake.deleteMany({
     userId: new ObjectId(payload.userId),
     status: "pending",
   });
-  const stake = await Stake.create(payload);
+  const { fiatAmount, ...stakePayload } = payload;
+  const stake = await Stake.create({
+    ...stakePayload,
+    stakeType: STAKE_TYPE.FAST_TRACK_2X,
+  });
   if (stake) {
     response.success = true;
     response.message = "Stake added successfully";
@@ -126,7 +145,13 @@ const handleStakeEvent = async (txHash) => {
 
   const stake = await Stake.findOneAndUpdate(
     { transactionId: transaction?._id },
-    { status: DEFAULT_STATUS.ACTIVE, lastReward: momentFormated() }
+    {
+      status: DEFAULT_STATUS.ACTIVE,
+      lastReward: momentFormated(),
+      // activatedAt drives the 24h one-time 2X payout for fast-track stakes
+      activatedAt: new Date(),
+    },
+    { new: true }
   ).populate("userId");
 
   if (!stake) {
@@ -164,12 +189,14 @@ const handleStakeEvent = async (txHash) => {
     const referrerId = stake.userId.referredBy;
     const referral = require("./referral");
 
-    // Check if referrer has an active stake AND has not reached their capping limit.
-    // NOTE: The staker's own capping reset (above) is awaited first, so
-    // handleCappingEvent here always reads up-to-date lastCappingReachedAt.
+    // Check if referrer is staked AND has not reached their capping limit.
+    // "Staked" = active stake OR a fast-track stake paid within the re-stake
+    // grace window (so a sponsor who just received 2X doesn't lose the bonus).
+    // handleCappingEvent ignores fast-track stakes, so fast-track-only users
+    // are never capped.
     const [referrerCapping, referrerActiveStake] = await Promise.all([
       referral.handleCappingEvent(referrerId),
-      Stake.findOne({ userId: referrerId, status: DEFAULT_STATUS.ACTIVE }).lean(),
+      fastTrack.hasQualifyingStake(referrerId),
     ]);
 
     if (referrerActiveStake && !referrerCapping?.isCappingReached) {
@@ -199,6 +226,22 @@ const handleStakeEvent = async (txHash) => {
       console.log(
         `handleStakeEvent: skipping instant_bonus for referrer ${referrerId} — referrer is capped or has no active stake.`
       );
+    }
+
+    // ── 2X Fast-Track: sponsor credit / unlock / rank ─────────────────────
+    // +1 withdrawal credit ONLY on the direct's FIRST confirmed stake
+    // (daily re-stakes must not hand out free withdrawal credits).
+    // Unlock + rank are computed from directs that actually staked.
+    try {
+      const result = await fastTrack.onDirectStakeConfirmed(stake);
+      if (result) {
+        console.log(
+          `handleStakeEvent: sponsor ${referrerId} → stakedDirects=${result.stakedDirects}, ` +
+          `unlocked=${result.unlocked}, rank=${result.rank}${result.promoted ? " (PROMOTED)" : ""}`
+        );
+      }
+    } catch (refUpdateErr) {
+      console.error("handleStakeEvent: Error updating referrer 2X/rank status:", refUpdateErr?.message);
     }
   }
   socket.io.to(`${stake?.userId?._id}`).emit(CONTRACT_EVENTS.STAKE, {});

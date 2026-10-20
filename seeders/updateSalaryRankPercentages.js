@@ -3,12 +3,20 @@
  *
  * One-shot DB migration seeder
  * ─────────────────────────────
- * Updates the `rewardPercentage` field on each of the 7 Salary Rank
- * documents to match the new Salary Rank structure:
+ * Updates the 7 Salary Rank documents to the 2X Fast-Track structure:
  *
- *   starKey 1 → 2%      starKey 2 → 2%      starKey 3 → 2%
- *   starKey 4 → 2.5%    starKey 5 → 3%      starKey 6 → 3.5%
- *   starKey 7 → 5%
+ *   Rank 1 →     5 directs →  2%      Rank 2 →    25 directs →  4%
+ *   Rank 3 →   125 directs →  6%      Rank 4 →   625 directs →  8.5%
+ *   Rank 5 →  3125 directs → 11.5%    Rank 6 → 15625 directs → 15%
+ *   Rank 7 → 78125 directs → 20%
+ *
+ * NOTE: percentages are NOMINAL shares of each withdrawal. The salary
+ * service caps the total paid at FAST_TRACK.SALARY_POOL_PERCENTAGE (20%)
+ * and scales achieved ranks proportionally when their sum exceeds it.
+ *
+ * Legacy qualification fields (selfBusiness / directBussiness /
+ * totalTeamBusiness / totalTeamSize) are also aligned to the 5 BW model so
+ * nothing else in the system still carries the old $100/$1000 thresholds.
  *
  * Run ONCE with:
  *   node seeders/updateSalaryRankPercentages.js
@@ -19,16 +27,19 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 const Rank     = require("../models/rank.model");
+const { FAST_TRACK } = require("../config/constants");
 
-const SALARY_RANK_PERCENTAGES = [
-  { starKey: 1, rewardPercentage: "2"   },
-  { starKey: 2, rewardPercentage: "2"   },
-  { starKey: 3, rewardPercentage: "2"   },
-  { starKey: 4, rewardPercentage: "2.5" },
-  { starKey: 5, rewardPercentage: "3"   },
-  { starKey: 6, rewardPercentage: "3.5" },
-  { starKey: 7, rewardPercentage: "5"   },
-];
+const PERCENTAGES = ["2", "4", "6", "8.5", "11.5", "15", "20"];
+
+const SALARY_RANK_PERCENTAGES = FAST_TRACK.RANK_DIRECT_THRESHOLDS.map((directs, idx) => ({
+  starKey: idx + 1,
+  directTeam: String(directs),
+  rewardPercentage: PERCENTAGES[idx],
+  selfBusiness: String(FAST_TRACK.STAKE_AMOUNT),
+  directBussiness: String(directs * FAST_TRACK.STAKE_AMOUNT),
+  totalTeamBusiness: "0",
+  totalTeamSize: "0",
+}));
 
 const run = async () => {
   await mongoose.connect(process.env.DB_URI || process.env.MONGO_URI, {
@@ -37,12 +48,21 @@ const run = async () => {
   });
 
   console.log("✅ Connected to MongoDB");
-  console.log("📦 Updating Salary Rank rewardPercentage values...\n");
+  console.log("📦 Updating Salary Rank directTeam & rewardPercentage values...\n");
 
   for (const entry of SALARY_RANK_PERCENTAGES) {
     const result = await Rank.updateOne(
       { starKey: entry.starKey },
-      { $set: { rewardPercentage: entry.rewardPercentage } }
+      {
+        $set: {
+          rewardPercentage:  entry.rewardPercentage,
+          directTeam:        entry.directTeam,
+          selfBusiness:      entry.selfBusiness,
+          directBussiness:   entry.directBussiness,
+          totalTeamBusiness: entry.totalTeamBusiness,
+          totalTeamSize:     entry.totalTeamSize,
+        },
+      }
     );
 
     if (result.matchedCount === 0) {
@@ -52,7 +72,7 @@ const run = async () => {
       );
     } else {
       console.log(
-        `  ✅ starKey ${entry.starKey} → rewardPercentage set to ${entry.rewardPercentage}%` +
+        `  ✅ starKey ${entry.starKey} → directs: ${entry.directTeam}, rewardPercentage: ${entry.rewardPercentage}%` +
         (result.modifiedCount === 0 ? " (already up to date)" : " (updated)")
       );
     }

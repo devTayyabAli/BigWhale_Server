@@ -229,6 +229,23 @@ const userSchema = new mongoose.Schema(
       default: null,
       required: false,
     },
+    // ── BigWhale 2X Fast-Track & Universal Withdrawal Fields ─────────
+    is2XDailyUnlocked: {
+      type: Boolean,
+      default: false,
+    },
+    dailyWithdrawalCount: {
+      type: Number,
+      default: 0,
+    },
+    lastWithdrawalAt: {
+      type: Date,
+      default: null,
+    },
+    unusedDirectCount: {
+      type: Number,
+      default: 0,
+    },
 
   },
   {

@@ -26,6 +26,16 @@ const withdrawalSchema = new mongoose.Schema({
     enum: [DEFAULT_STATUS.PENDING,DEFAULT_STATUS.ACTIVE, DEFAULT_STATUS.INACTIVE],                      
     default:  DEFAULT_STATUS.PENDING,
   },
+  // ── 2X Fast-Track: how many direct-joining credits this withdrawal consumes.
+  // Consumed only when the withdrawal is CONFIRMED (not at request time).
+  requiredJoinings: {
+    type: Number,
+    default: 0,
+  },
+  fastTrackQuotaConsumedAt: {
+    type: Date,
+    default: null,
+  },
 },
 { 
   timestamps: true,

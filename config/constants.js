@@ -124,6 +124,37 @@ const CAPPING_PLAN_LABELS = {
   2: "Investor 2X",
   3: "Networker 3X",
 };
+
+/**
+ * Stake types.
+ *  LEGACY        → old daily-% ROI stake (capping applies, runs for STAKE_DURATION)
+ *  FAST_TRACK_2X → fixed 5 BW stake, pays 2X ONCE 24h after activation
+ *                  (only when the user has unlocked via 5 staked directs),
+ *                  then the stake is closed. Capping does NOT apply.
+ */
+const STAKE_TYPE = {
+  LEGACY: "legacy",
+  FAST_TRACK_2X: "fast_track_2x",
+};
+
+/**
+ * BigWhale 2X Fast-Track business rules (single source of truth for Server).
+ */
+const FAST_TRACK = {
+  STAKE_AMOUNT: 5,                 // fixed stake size (BW / USD, 1:1)
+  AMOUNT_TOLERANCE: 0.01,          // float tolerance for amount equality checks
+  PAYOUT_MULTIPLIER: 2,            // 2X
+  PAYOUT_DELAY_HOURS: 24,          // paid once, 24h after activation
+  UNLOCK_DIRECTS: 5,               // directs (with a confirmed stake) needed to unlock 2X
+  WITHDRAWAL_CHUNK: 10,            // withdrawals are exactly 10 BW
+  MAX_WITHDRAWALS_PER_WINDOW: 1,   // 1 withdrawal per rolling window
+  WITHDRAWAL_WINDOW_HOURS: 24,     // rolling 24h window
+  PENDING_WITHDRAWAL_STALE_MINUTES: 10, // pending w/o tx older than this is discarded
+  SALARY_POOL_PERCENTAGE: 20,      // 20% of every withdrawal feeds the salary pool
+  RESTAKE_GRACE_HOURS: 48,         // after a 2X payout, user stays "staked" this long to re-stake
+  // Direct-count thresholds for Rank 1..7 (5^N)
+  RANK_DIRECT_THRESHOLDS: [5, 25, 125, 625, 3125, 15625, 78125],
+};
 const EMAIL_SUBJECT = {
   REGISTER: "Account Verification",
   FORGOT_PASSWORD: "Password Reset Instructions",
@@ -176,4 +207,6 @@ module.exports = {
   EMAIL_SUBJECT,
   EXCHANGE_TYPES,
   CAPPING_PLAN_LABELS,
+  STAKE_TYPE,
+  FAST_TRACK,
 }

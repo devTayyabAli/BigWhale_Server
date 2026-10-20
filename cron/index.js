@@ -12,6 +12,7 @@ const { processParentRankCron } = require("./processMemberParentRank");
 const { addMissingStakeReward } = require("./addMissingStakeReward");
 const { deleteSameDayStakeReward } = require("./deleteSameDayStakeReward");
 const { saveIncomeRewardCron } = require("./incomeReward");
+const { fastTrackRankSyncCron } = require("./fastTrackRankSync");
 const startCronJobs = () => {
   calcuateStakingRewards.start();
   validateStakeExpiration.start();
@@ -21,10 +22,20 @@ const startCronJobs = () => {
   validatePendingP2PTx.start();
   valdatePendingWithdrawalTx.start();
   validatePendingRegisterUsers.start();
-  calculateAndUpdateUserStarRank.start();
+
+  // ── Ranks ────────────────────────────────────────────────────────────────
+  // 2X Fast-Track: ranks are driven by staked-direct count (5^N) and are
+  // lifetime. The legacy turnover-based rank crons below reset userRankId to
+  // null for users who don't meet the OLD criteria (selfBusiness, team
+  // business, team size) and would wipe the new ranks every night.
+  // They are intentionally DISABLED — do not re-enable without reworking
+  // services/rank.js to the new criteria.
+  // calculateAndUpdateUserStarRank.start();
+  // processParentRankCron.start();
+  fastTrackRankSyncCron.start();
+
   starRewardDistributionCron.start();
   saveLeadershipBonusCron.start();
-  processParentRankCron.start();
   addMissingStakeReward.start();
   saveIncomeRewardCron.start();
 };

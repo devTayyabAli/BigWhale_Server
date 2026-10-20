@@ -4,7 +4,7 @@ const User = require("../models/user.model");
 const UserStakeReward = require("../models/userStakingReward.model");
 const moment = require("moment-timezone");
 const { getSettingWithKey } = require("../helpers/setting");
-const { SETTING } = require("../config/constants");
+const { SETTING, STAKE_TYPE } = require("../config/constants");
 const { getMissingIncomeReward } = require("../services/referral");
 const cronTiming = process.env.APP_ENV !== "production" ? "*/10 * * * *" : "45 0 * * *";
 
@@ -19,9 +19,12 @@ const addMissingStakeReward = cron.schedule(cronTiming, async () => {
   const users = await User.find({ status: "active" });
   try {
     for (const user of users) {
+      // Fast-track stakes are paid once (2X) by calculateStakingReward and must
+      // never receive legacy daily-% backfill rewards.
       const stakes = await Stake.find({
         userId: user?._id,
         status: "active",
+        stakeType: { $ne: STAKE_TYPE.FAST_TRACK_2X },
       }).populate("userId");
 
       for (const stake of stakes) {

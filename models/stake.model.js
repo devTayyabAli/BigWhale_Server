@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const moment = require("moment");
-const { DEFAULT_STATUS, SETTING} = require("../config/constants");
+const { DEFAULT_STATUS, SETTING, STAKE_TYPE } = require("../config/constants");
 const { getSettingWithKey } = require("../helpers/setting");
 
 const stakeDurationExpiry = async () => await getSettingWithKey(SETTING.STAKE_DURATION_EXPIRY);
@@ -50,7 +50,24 @@ const stakeSchema = new mongoose.Schema(
   lastReward:{
     type: Date,
     default:null,
-  }
+  },
+  // ── 2X Fast-Track fields ─────────────────────────────────────────
+  // Existing documents have no stakeType → treated as LEGACY.
+  stakeType: {
+    type: String,
+    enum: Object.values(STAKE_TYPE),
+    default: STAKE_TYPE.LEGACY,
+  },
+  // When the on-chain stake event confirmed the stake (status → active).
+  activatedAt: {
+    type: Date,
+    default: null,
+  },
+  // When the one-time 2X payout was credited (fast-track only).
+  fastTrackPaidAt: {
+    type: Date,
+    default: null,
+  },
 },
 { timestamps: true,
   // collection: 'stakes' 

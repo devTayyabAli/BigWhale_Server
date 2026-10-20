@@ -2,7 +2,7 @@ const TeamMember = require("../models/teamMember.model");
 const mongoose = require("mongoose");
 const IncomeLevel = require("../models/incomeLevel.model");
 const Stake = require("../models/stake.model");
-const { DEFAULT_STATUS, OTHER_REWARD, SETTING } = require("../config/constants");
+const { DEFAULT_STATUS, OTHER_REWARD, SETTING, STAKE_TYPE } = require("../config/constants");
 const { userAccountCreated } = require("./user");
 const { ObjectId } = require("mongoose").Types;
 const UserStakeReward = require("../models/userStakingReward.model");
@@ -772,7 +772,19 @@ const stakeAmountTaken = async (userId, stakeDate = null) => {
     // but passing new Date(Date.now()) when oldestStaking was null would
     // exclude ALL historical rewards, making earnAmount always 0.
     const dateFilter = stakeDate ? { $gte: new Date(stakeDate) } : undefined;
-    const matchStake = { userId: new ObjectId(userId), ...(dateFilter && { createdAt: dateFilter }) };
+
+    // 2X Fast-Track payouts are a fixed one-time return on a closed stake and
+    // must not eat into the legacy capping budget of a mixed (legacy + fast-track) user.
+    const fastTrackStakeIds = await Stake.distinct("_id", {
+      userId: new ObjectId(userId),
+      stakeType: STAKE_TYPE.FAST_TRACK_2X,
+    });
+
+    const matchStake = {
+      userId: new ObjectId(userId),
+      ...(dateFilter && { createdAt: dateFilter }),
+      ...(fastTrackStakeIds.length > 0 && { stakeId: { $nin: fastTrackStakeIds } }),
+    };
     const matchOther = { userId: new ObjectId(userId), ...(dateFilter && { createdAt: dateFilter }) };
 
     const [userStakeReward, userOtherReward] = await Promise.all([
@@ -816,6 +828,10 @@ const handleCappingEvent = async (userId, date = null) => {
             userId: userObjectId,
             status: DEFAULT_STATUS.ACTIVE,
             endDate: { $gte: refDate },
+            // 2X Fast-Track stakes are excluded from capping: they pay a fixed
+            // one-time 2X and are then closed. A user with only fast-track
+            // stakes gets cappingAmount = 0 → never capped.
+            stakeType: { $ne: STAKE_TYPE.FAST_TRACK_2X },
           },
         },
         {

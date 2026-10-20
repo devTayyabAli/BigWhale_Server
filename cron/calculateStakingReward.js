@@ -22,7 +22,8 @@
 const cron               = require("node-cron");
 const services           = require("../services/index");
 const socket             = require("../helpers/sockets");
-const { SETTING }        = require("../config/constants");
+const { SETTING, DEFAULT_STATUS, FAST_TRACK } = require("../config/constants");
+const fastTrack          = require("../services/fastTrack");
 const { getSettingWithKey } = require("../helpers/setting");
 const Stake              = require("../models/stake.model");
 const User               = require("../models/user.model");
@@ -94,7 +95,18 @@ const stakeRewardCron = async () => {
       }
 
       try {
-        // ── Run capping check and duplicate-day guard in parallel ──────────
+        // ── 2X Fast-Track stake: pay 2X ONCE, 24h after activation ────────
+        // Conditions: user unlocked (5 staked directs), not already paid,
+        // and PAYOUT_DELAY_HOURS elapsed since activation. Capping does not
+        // apply — the one-time 2X payout *is* the cap. After payout the
+        // stake is closed so no legacy %/day reward can ever accrue on it.
+        if (fastTrack.isFastTrackStake(stake)) {
+          const outcome = await processFastTrackStake(stake);
+          if (outcome === "paid") processed++; else skipped++;
+          continue;
+        }
+
+        // ── Legacy stake: run capping check and duplicate-day guard in parallel ──
         const [capping, existingTodayReward] = await Promise.all([
           referral.handleCappingEvent(stake.userId._id),
           getRewardForDay(stake._id),
@@ -127,7 +139,7 @@ const stakeRewardCron = async () => {
           continue;
         }
 
-        // ── Calculate reward amount ────────────────────────────────────────
+        // ── Legacy reward amount (daily percentage) ────────────────────────
         const amount = calculatePercentage(percentage, stake.amount);
 
         if (amount <= 0) {
@@ -201,6 +213,54 @@ const stakeRewardCron = async () => {
     }).catch(() => {});
     await sendCronFailureEmail("stakeRewardCron").catch(() => {});
   }
+};
+
+// ── 2X Fast-Track one-time payout ─────────────────────────────────────────────
+/**
+ * @returns {"paid"|"waiting_unlock"|"waiting_24h"|"already_paid"|"invalid"}
+ */
+const processFastTrackStake = async (stake) => {
+  const userId = stake.userId._id;
+
+  if (stake.fastTrackPaidAt) {
+    // Defensive: should already be inactive. Close it so it drops out of the query.
+    await Stake.updateOne({ _id: stake._id }, { $set: { status: DEFAULT_STATUS.INACTIVE } });
+    return "already_paid";
+  }
+
+  if (!stake.userId.is2XDailyUnlocked) {
+    return "waiting_unlock";
+  }
+
+  const activatedAt = stake.activatedAt || stake.updatedAt || stake.createdAt;
+  const readyAt = new Date(new Date(activatedAt).getTime() + FAST_TRACK.PAYOUT_DELAY_HOURS * 3600 * 1000);
+  if (Date.now() < readyAt.getTime()) {
+    return "waiting_24h";
+  }
+
+  const amount = Number((Number(stake.amount) * FAST_TRACK.PAYOUT_MULTIPLIER).toFixed(6));
+  if (amount <= 0) return "invalid";
+
+  const now = new Date();
+
+  // Atomic claim: only the first cron run that flips fastTrackPaidAt pays.
+  const claimed = await Stake.findOneAndUpdate(
+    { _id: stake._id, fastTrackPaidAt: null, status: DEFAULT_STATUS.ACTIVE },
+    { $set: { fastTrackPaidAt: now, lastReward: now, status: DEFAULT_STATUS.INACTIVE } },
+    { new: true }
+  );
+  if (!claimed) return "already_paid";
+
+  await UserStakingReward.create({
+    userId,
+    stakeId: stake._id,
+    amount,
+    createdAt: now,
+  });
+
+  socket.io?.to(`${userId}`).emit("cappingUpdate", {});
+  console.log(`✅ 2X Fast-Track payout — stake: ${stake._id}, user: ${userId}, amount: ${amount}`);
+  return "paid";
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -7,16 +7,24 @@
  *  On every confirmed withdrawal, 20% of the total amount is distributed
  *  as "Lifetime Salary" to active salary rank holders (Ranks 1–7).
  *
- *  Each rank has a fixed sub-pool percentage:
- *    Rank 1 → 2%   Rank 2 → 2%   Rank 3 → 2%
- *    Rank 4 → 2.5% Rank 5 → 3%   Rank 6 → 3.5% Rank 7 → 5%
- *    Total  → 20%
+ *  Each rank has a nominal percentage of the withdrawal (from the Rank
+ *  collection, seeded by seeders/updateSalaryRankPercentages.js):
+ *    Rank 1 → 2%    Rank 2 → 4%    Rank 3 → 6%    Rank 4 → 8.5%
+ *    Rank 5 → 11.5% Rank 6 → 15%   Rank 7 → 20%   (nominal sum = 67%)
  *
- *  If multiple users hold the same rank they SPLIT that rank's pool equally
- *  (Option B — sustainable; company never over-pays beyond 20%).
+ *  SOLVENCY CAP: the company only retains FAST_TRACK.SALARY_POOL_PERCENTAGE
+ *  (20%) of each withdrawal, so the total actually paid can never exceed
+ *  that. Ranks that currently have eligible holders receive their nominal
+ *  share in full while the sum of achieved ranks' nominal shares fits inside
+ *  20%; once it exceeds 20% every achieved rank is scaled down
+ *  proportionally so the payout equals exactly 20%.
+ *    e.g. only Rank 1 & 2 achieved → 2% + 4% = 6% paid as-is (14% to company)
+ *         all 7 achieved → 67% scaled to 20% (Rank 1 gets 2/67×20 ≈ 0.6%)
  *
- *  If no user holds a rank yet, that rank's share is logged as
- *  "unachieved" — to be credited to the company/liquidity wallet.
+ *  If multiple users hold the same rank they SPLIT that rank's pool equally.
+ *
+ *  Pool money that is not paid out (unachieved ranks / cap remainder) is
+ *  logged as "unachieved" — to be credited to the company/liquidity wallet.
  *
  *  Distribution is fire-and-forget; failures are logged but never
  *  block or roll back the underlying withdrawal.
@@ -27,222 +35,191 @@ const User            = require("../models/user.model");
 const Stake           = require("../models/stake.model");
 const UserOtherReward = require("../models/userOtherReward.model");
 const UserStakeReward = require("../models/userStakingReward.model");
-const { OTHER_REWARD, DEFAULT_STATUS, SETTING } = require("../config/constants");
-const { getSettingsWithKeys }                   = require("../helpers/setting");
+const fastTrack       = require("./fastTrack");
+const { OTHER_REWARD, DEFAULT_STATUS, SETTING, STAKE_TYPE, FAST_TRACK } = require("../config/constants");
+const { getSettingsWithKeys } = require("../helpers/setting");
+
+/**
+ * Side-effect-free eligibility check for a salary rank holder.
+ *  1. Must be "staked": active stake OR fast-track stake paid within the
+ *     re-stake grace window (fastTrack.hasQualifyingStake).
+ *  2. Legacy capping: only LEGACY active stakes build the cap, and only
+ *     legacy staking rewards count against it. Fast-track-only holders have
+ *     cappingAmount = 0 → never capped.
+ */
+const isHolderEligible = async (holderId, cappingSettings) => {
+  const staked = await fastTrack.hasQualifyingStake(holderId);
+  if (!staked) {
+    console.log(`distributeSalaryRankReward: userId=${holderId} skipped — no qualifying stake.`);
+    return false;
+  }
+
+  const holderUser = await User.findById(holderId)
+    .select("userRankId lastCappingReachedAt")
+    .lean();
+
+  const cappingFormula = holderUser?.userRankId === null
+    ? (Number(cappingSettings[SETTING.NORMAL_CAPPING]) || 2)
+    : (Number(cappingSettings[SETTING.MARKET_CAPPING])  || 3);
+
+  const [stakeAgg, fastTrackStakeIds] = await Promise.all([
+    Stake.aggregate([
+      {
+        $match: {
+          userId: holderId,
+          status: DEFAULT_STATUS.ACTIVE,
+          stakeType: { $ne: STAKE_TYPE.FAST_TRACK_2X },
+        },
+      },
+      { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
+    ]),
+    Stake.distinct("_id", { userId: holderId, stakeType: STAKE_TYPE.FAST_TRACK_2X }),
+  ]);
+
+  const totalLegacyStake = stakeAgg.length > 0 ? stakeAgg[0].total : 0;
+  const cappingAmount    = totalLegacyStake * cappingFormula;
+  if (cappingAmount <= 0) return true; // fast-track only → no cap
+
+  const earnSince  = holderUser?.lastCappingReachedAt || null;
+  const matchFilter = {
+    userId: holderId,
+    ...(earnSince && { createdAt: { $gte: new Date(earnSince) } }),
+    ...(fastTrackStakeIds.length > 0 && { stakeId: { $nin: fastTrackStakeIds } }),
+  };
+  const rewardAgg = await UserStakeReward.aggregate([
+    { $match: matchFilter },
+    { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
+  ]);
+  const earnAmount = rewardAgg.length > 0 ? rewardAgg[0].total : 0;
+
+  if (earnAmount >= cappingAmount) {
+    console.log(
+      `distributeSalaryRankReward: userId=${holderId} skipped — capped ` +
+      `(earned ${earnAmount} >= cap ${cappingAmount}).`
+    );
+    return false;
+  }
+  return true;
+};
 
 /**
  * Distribute salary rank rewards for a single confirmed withdrawal.
  *
  * @param {number} totalWithdrawalAmount  - The FULL withdrawal amount (BW)
  *                                          before the 80/20 split.
- * @returns {Promise<{ distributed: number, unachieved: number }>}
+ * @returns {Promise<{ distributed: number, unachieved: number, poolAmount: number, scale: number }>}
  */
 const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
-  if (!totalWithdrawalAmount || totalWithdrawalAmount <= 0) {
-    return { distributed: 0, unachieved: 0 };
+  const total = Number(totalWithdrawalAmount);
+  if (!total || total <= 0) {
+    return { distributed: 0, unachieved: 0, poolAmount: 0, scale: 1 };
   }
 
-  let totalDistributed = 0;
-  let totalUnachieved  = 0;
+  // The only money available for salaries: the retained fee.
+  const poolAmount = Number((total * (FAST_TRACK.SALARY_POOL_PERCENTAGE / 100)).toFixed(8));
 
   try {
-    // ── 1. Load all 7 salary ranks ordered by starKey ────────────────────
+    // ── 1. Load all salary ranks ordered by starKey ──────────────────────
     const ranks = await Rank.find({}).sort({ starKey: 1 }).lean();
-
     if (!ranks || ranks.length === 0) {
       console.warn("distributeSalaryRankReward: no ranks found in DB — skipping.");
-      return { distributed: 0, unachieved: totalWithdrawalAmount };
+      return { distributed: 0, unachieved: poolAmount, poolAmount, scale: 1 };
     }
 
-    // ── 2. Pre-fetch capping multipliers once (reused for every rank) ────
     const cappingSettings = await getSettingsWithKeys([
       SETTING.NORMAL_CAPPING,
       SETTING.MARKET_CAPPING,
     ]);
 
-    // ── 3. Process each rank ─────────────────────────────────────────────
-    const rewardDocs = [];
-
+    // ── 2. Resolve eligible holders + nominal share per rank ─────────────
+    const achieved = []; // { rank, pct, nominal, holders[] }
     for (const rank of ranks) {
-      // rewardPercentage is stored as String in the DB schema — coerce safely.
-      const rewardPercentage = Number(rank.rewardPercentage) || 0;
-      if (rewardPercentage <= 0) {
-        console.warn(
-          `distributeSalaryRankReward: rank starKey=${rank.starKey} has no ` +
-          `rewardPercentage set in DB — skipping this rank. ` +
-          `Please update the rank document to add a rewardPercentage value.`
-        );
+      const pct = Number(rank.rewardPercentage) || 0;
+      if (pct <= 0 || rank.starKey == null || isNaN(rank.starKey)) {
+        console.warn(`distributeSalaryRankReward: rank _id=${rank._id} has invalid starKey/rewardPercentage — skipping.`);
         continue;
       }
 
-      // starKey must be a valid number for the $gte query to work correctly.
-      if (rank.starKey == null || isNaN(rank.starKey)) {
-        console.warn(
-          `distributeSalaryRankReward: rank _id=${rank._id} has no starKey — skipping.`
-        );
-        continue;
-      }
-
-      // Pool share for this rank (e.g. 2% of total withdrawal)
-      const rankPoolAmount = Number(
-        (totalWithdrawalAmount * (rewardPercentage / 100)).toFixed(8)
-      );
-
-      if (rankPoolAmount <= 0) continue;
-
-      // ── 3. Find all active users who have achieved this rank ───────────
-      //       userRankId stores the starKey of the highest achieved rank.
-      //       A user qualifies if their userRankId >= this rank's starKey.
-      const candidateHolders = await User.find({
-        status:     DEFAULT_STATUS.ACTIVE,
+      // userRankId stores the starKey of the highest achieved rank; a user
+      // qualifies for every rank at or below their own.
+      const candidates = await User.find({
+        status: DEFAULT_STATUS.ACTIVE,
         userRankId: { $gte: rank.starKey },
       })
         .select("_id")
         .lean();
 
-      // Filter candidateHolders to only include non-capped users with an active stake.
-      // IMPORTANT: We do NOT call handleCappingEvent() here because:
-      //  1. It has a side-effect (updates lastCappingReachedAt on the user document).
-      //  2. It counts ALL UserOtherReward (including salary rewards themselves) toward
-      //     the capping limit, creating a self-reinforcing exclusion loop where users
-      //     who earned salary bonuses eventually stop receiving them.
-      //  Instead we do a direct, lightweight, side-effect-free inline capping check
-      //  that only counts staking rewards (UserStakeReward) against the cap.
-      const eligibleHolders = [];
-      if (candidateHolders && candidateHolders.length > 0) {
-        await Promise.all(
-          candidateHolders.map(async (holder) => {
-            // 1. Must have at least one active stake (trust DB status, no endDate filter
-            //    because endDate may lag if the cron hasn't expired the stake yet).
-            const activeStake = await Stake.findOne({
-              userId: holder._id,
-              status: DEFAULT_STATUS.ACTIVE,
-            }).lean();
+      const holders = [];
+      await Promise.all(
+        candidates.map(async (c) => {
+          if (await isHolderEligible(c._id, cappingSettings)) holders.push(c._id);
+        })
+      );
 
-            if (!activeStake) {
-              console.log(`distributeSalaryRankReward: userId=${holder._id} skipped — no active stake.`);
-              return;
-            }
-
-            // 2. Resolve the holder's full user record to get userRankId & capping reset date.
-            const holderUser = await User.findById(holder._id)
-              .select("userRankId lastCappingReachedAt")
-              .lean();
-
-            // 3. Calculate capping threshold from active stake amounts only.
-            const cappingFormula = holderUser?.userRankId === null
-              ? (Number(cappingSettings[SETTING.NORMAL_CAPPING]) || 2)
-              : (Number(cappingSettings[SETTING.MARKET_CAPPING])  || 3);
-
-            const stakeAgg = await Stake.aggregate([
-              {
-                $match: {
-                  userId: holder._id,
-                  status: DEFAULT_STATUS.ACTIVE,
-                },
-              },
-              { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
-            ]);
-            const totalActiveStake = stakeAgg.length > 0 ? stakeAgg[0].total : 0;
-            const cappingAmount    = totalActiveStake * cappingFormula;
-
-            if (cappingAmount <= 0) {
-              // No measurable stake → treat as not capped (safe default — include them).
-              eligibleHolders.push(holder);
-              return;
-            }
-
-            // 4. Sum ONLY staking rewards (not salary/other rewards) since
-            //    the user's last capping reset, to avoid double-counting.
-            const earnSince   = holderUser?.lastCappingReachedAt || null;
-            const dateFilter  = earnSince ? { $gte: new Date(earnSince) } : undefined;
-            const matchFilter = {
-              userId: holder._id,
-              ...(dateFilter && { createdAt: dateFilter }),
-            };
-            const stakeRewardAgg = await UserStakeReward.aggregate([
-              { $match: matchFilter },
-              { $group: { _id: null, total: { $sum: { $ifNull: ["$amount", 0] } } } },
-            ]);
-            const earnAmount = stakeRewardAgg.length > 0 ? stakeRewardAgg[0].total : 0;
-
-            const isCapped = earnAmount >= cappingAmount;
-            if (isCapped) {
-              console.log(
-                `distributeSalaryRankReward: userId=${holder._id} skipped — capped ` +
-                `(earned ${earnAmount} >= cap ${cappingAmount}).`
-              );
-            } else {
-              eligibleHolders.push(holder);
-            }
-          })
-        );
-      }
-
-      if (!eligibleHolders || eligibleHolders.length === 0) {
-        // No eligible non-capped holder for this rank — amount goes to company wallet
-        console.log(
-          `distributeSalaryRankReward: rank ${rank.starKey} (${rewardPercentage}%) ` +
-          `has no eligible holders — ${rankPoolAmount} BW → company/liquidity wallet.`
-        );
-        totalUnachieved = Number((totalUnachieved + rankPoolAmount).toFixed(8));
+      if (holders.length === 0) {
+        console.log(`distributeSalaryRankReward: rank ${rank.starKey} (${pct}%) has no eligible holders.`);
         continue;
       }
 
-      // ── 4. Split pool equally among all eligible holders ───────────────
-      const perUserAmount = Number(
-        (rankPoolAmount / eligibleHolders.length).toFixed(8)
-      );
+      achieved.push({
+        rank,
+        pct,
+        nominal: Number((total * (pct / 100)).toFixed(8)),
+        holders,
+      });
+    }
 
+    // ── 3. Apply the 20% solvency cap ────────────────────────────────────
+    const nominalSum = achieved.reduce((s, a) => s + a.nominal, 0);
+    const scale = nominalSum > poolAmount && nominalSum > 0 ? poolAmount / nominalSum : 1;
+
+    // ── 4. Build reward docs ─────────────────────────────────────────────
+    const rewardDocs = [];
+    let totalDistributed = 0;
+
+    for (const a of achieved) {
+      const rankPoolAmount = Number((a.nominal * scale).toFixed(8));
+      const perUserAmount  = Number((rankPoolAmount / a.holders.length).toFixed(8));
       if (perUserAmount <= 0) continue;
 
-      for (const holder of eligibleHolders) {
+      for (const holderId of a.holders) {
         rewardDocs.push({
-          userId:           holder._id,
+          userId:           holderId,
           type:             OTHER_REWARD.SALARY_RANK,
           amount:           String(perUserAmount),
-          rankId:           rank._id,
-          rewardPercentage: rewardPercentage,
+          rankId:           a.rank._id,
+          rewardPercentage: a.pct,
         });
       }
-
-      totalDistributed = Number(
-        (totalDistributed + rankPoolAmount).toFixed(8)
-      );
+      totalDistributed = Number((totalDistributed + perUserAmount * a.holders.length).toFixed(8));
 
       console.log(
-        `distributeSalaryRankReward: rank ${rank.starKey} (${rewardPercentage}%) — ` +
-        `${rankPoolAmount} BW split among ${eligibleHolders.length} holder(s) = ` +
-        `${perUserAmount} BW each.`
+        `distributeSalaryRankReward: rank ${a.rank.starKey} (${a.pct}%${scale < 1 ? ` ×${scale.toFixed(4)}` : ""}) — ` +
+        `${rankPoolAmount} BW split among ${a.holders.length} holder(s) = ${perUserAmount} BW each.`
       );
     }
 
-    // ── 5. Bulk-insert all reward documents ──────────────────────────────
+    const totalUnachieved = Number(Math.max(0, poolAmount - totalDistributed).toFixed(8));
+
+    // ── 5. Bulk-insert ───────────────────────────────────────────────────
     if (rewardDocs.length > 0) {
-      await UserOtherReward.insertMany(rewardDocs, { ordered: false }).catch(
-        (err) => {
-          // Duplicate-key errors are acceptable (dedup safety net).
-          // Re-throw anything else.
-          if (err.code !== 11000) throw err;
-          console.warn(
-            `distributeSalaryRankReward: ${err.writeErrors?.length ?? "some"} ` +
-            "duplicate(s) skipped."
-          );
-        }
-      );
-      console.log(
-        `✅ distributeSalaryRankReward: inserted ${rewardDocs.length} salary reward(s). ` +
-        `Distributed: ${totalDistributed} BW | Unachieved → company: ${totalUnachieved} BW`
-      );
+      await UserOtherReward.insertMany(rewardDocs, { ordered: false }).catch((err) => {
+        if (err.code !== 11000) throw err;
+        console.warn(`distributeSalaryRankReward: ${err.writeErrors?.length ?? "some"} duplicate(s) skipped.`);
+      });
     }
 
-    return { distributed: totalDistributed, unachieved: totalUnachieved };
+    console.log(
+      `✅ distributeSalaryRankReward: withdrawal ${total} BW → pool ${poolAmount} BW | ` +
+      `distributed ${totalDistributed} BW to ${rewardDocs.length} holder(s) | ` +
+      `unachieved → company ${totalUnachieved} BW${scale < 1 ? ` | cap scale ${scale.toFixed(4)}` : ""}`
+    );
 
+    return { distributed: totalDistributed, unachieved: totalUnachieved, poolAmount, scale };
   } catch (err) {
     console.error("distributeSalaryRankReward: error —", err?.message);
-    // Re-throw so the caller's .catch() handler can log/alert if needed.
     throw err;
   }
 };
 
-module.exports = { distributeSalaryRankReward };
+module.exports = { distributeSalaryRankReward, isHolderEligible };

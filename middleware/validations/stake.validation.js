@@ -5,6 +5,8 @@ const createStakeValidation = (req, res, next) => {
     const schema = Joi.object({
       userId: Joi.string().length(24).hex().required(), 
       amount: Joi.number().positive().required(),
+      // USD value typed by the user — used to enforce the fixed 5 BW fast-track stake
+      fiatAmount: Joi.number().positive().optional(),
     });
 
     const { error } = schema.validate(req.body, { abortEarly: false });
