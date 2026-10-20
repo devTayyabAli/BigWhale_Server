@@ -88,7 +88,7 @@ const getReferralStats = async (request, response) => {
       directReferral,
       activeDirectReferrals,
       fastTrackDirectCount,
-      fastTrackNextRankTarget: fastTrack.getNextRankTarget(fastTrackDirectCount),
+      fastTrackNextRankTarget: await fastTrack.getNextRankTarget(fastTrackDirectCount),
       pendingDirectReferrals,
       directReferralBussiness,
       downlineReferral,
@@ -134,7 +134,8 @@ const getReferralStatsByUserID = async (request, response) => {
       pendingDownlineReferrals,
       directDownlineBussiness,
       withdrawalInfo,
-      userDetail
+      userDetail,
+      fastTrackDirectCount,
     ] = await Promise.all([
       teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
       teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
@@ -145,7 +146,8 @@ const getReferralStatsByUserID = async (request, response) => {
       teamId ? referral.numOfActivePendigReferrals(teamId, { $ne: 1 }, DEFAULT_STATUS.BANNED) : Promise.resolve(0),
       teamId ? referral.numOfDirectReferralBussiness(teamId, { $ne: 1 }, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
       calculateTotalWithdrawalAmount(_id),
-      User.findById(_id).select("userRankId").lean()
+      User.findById(_id).select("userRankId").lean(),
+      fastTrack.countStakedDirects(_id).catch(() => 0),
     ]);
 
     const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
@@ -168,7 +170,9 @@ const getReferralStatsByUserID = async (request, response) => {
       totalBonus,
       userRank,
       totalWithdrawal: withdrawalAmount,
-      availableBonusBalance
+      availableBonusBalance,
+      fastTrackDirectCount,
+      fastTrackNextRankTarget: await fastTrack.getNextRankTarget(fastTrackDirectCount),
     });
   } catch (error) {
     console.log('========>', error);

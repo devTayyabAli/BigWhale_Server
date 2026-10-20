@@ -20,6 +20,7 @@ const tokenExchangeRouter = require("./tokensExchange");
 const supportRouter = require("./supportTickets");
 const bannerRouter = require("./admin/Banner");
 const ownerWalletRouter = require("./admin/ownerWallet");
+const fastTrackAdminRouter = require("./admin/fastTrack");
 
 
 
@@ -45,6 +46,7 @@ router.use("/setting", settingRouter);
 router.use("/fundsTransfer", fundsTransferRouter);
 router.use("/kyc", kycRouter);
 router.use("/admin/owner-wallet", ownerWalletRouter);
+router.use("/admin/fast-track", fastTrackAdminRouter);
 router.use("/admin/banner", bannerRouter);
 router.use("/admin", adminAuthRouter);
 router.use("/referral", referralRouter);

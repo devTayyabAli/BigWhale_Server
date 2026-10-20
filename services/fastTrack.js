@@ -28,6 +28,32 @@ const { DEFAULT_STATUS, STAKE_TYPE, FAST_TRACK } = require("../config/constants"
 
 const HOUR_MS = 60 * 60 * 1000;
 
+// Rank direct-targets are editable from the admin panel (Rank.directTeam),
+// so they are read from the DB with a short cache. FAST_TRACK constants are
+// only the fallback when a rank document is missing.
+let thresholdCache = { at: 0, values: null };
+
+const loadRankThresholds = async () => {
+  if (thresholdCache.values && Date.now() - thresholdCache.at < 60 * 1000) {
+    return thresholdCache.values;
+  }
+  const ranks = await Rank.find({ starKey: { $gte: 1, $lte: 7 } })
+    .select("starKey directTeam")
+    .lean();
+  const values = FAST_TRACK.RANK_DIRECT_THRESHOLDS.map((fallback, idx) => {
+    const doc = ranks.find((r) => Number(r.starKey) === idx + 1);
+    const n = Number(doc?.directTeam);
+    return Number.isInteger(n) && n > 0 ? n : fallback;
+  });
+  thresholdCache = { at: Date.now(), values };
+  return values;
+};
+
+/** Drop the cached thresholds so an admin edit applies immediately. */
+const invalidateRankCache = () => {
+  thresholdCache = { at: 0, values: null };
+};
+
 // ── Stake helpers ─────────────────────────────────────────────────────────────
 
 const isFastTrackStake = (stake) => stake?.stakeType === STAKE_TYPE.FAST_TRACK_2X;
@@ -90,18 +116,26 @@ const countStakedDirects = async (userId) => {
 };
 
 /** Rank (1..7) for a given staked-direct count, or null. */
-const getRankForDirects = (count) => {
+const getRankForDirects = async (count) => {
+  const thresholds = await loadRankThresholds();
   let rank = null;
-  FAST_TRACK.RANK_DIRECT_THRESHOLDS.forEach((threshold, idx) => {
+  thresholds.forEach((threshold, idx) => {
     if (count >= threshold) rank = idx + 1;
   });
   return rank;
 };
 
-/** Directs still needed for the next rank (null when max rank reached). */
-const getNextRankTarget = (count) => {
-  const next = FAST_TRACK.RANK_DIRECT_THRESHOLDS.find((t) => count < t);
+/** Directs required for the next rank (null when the top rank is reached). */
+const getNextRankTarget = async (count) => {
+  const thresholds = await loadRankThresholds();
+  const next = thresholds.find((t) => count < t);
   return next ?? null;
+};
+
+/** Directs required to unlock 2X — always the Rank 1 target. */
+const getUnlockDirects = async () => {
+  const thresholds = await loadRankThresholds();
+  return thresholds[0];
 };
 
 const notifyRankPromotion = async (userId, starKey) => {
@@ -156,15 +190,18 @@ const syncReferrerStatus = async (referrerId, { creditWithdrawal = false } = {})
     .lean();
   if (!referrer) return { stakedDirects: 0, unlocked: false, rank: null, promoted: false };
 
-  const stakedDirects = await countStakedDirects(referrerId);
+  const [stakedDirects, unlockDirects] = await Promise.all([
+    countStakedDirects(referrerId),
+    getUnlockDirects(),
+  ]);
   const update = { $set: {}, $inc: {} };
 
   if (creditWithdrawal) update.$inc.unusedDirectCount = 1;
 
-  const unlocked = stakedDirects >= FAST_TRACK.UNLOCK_DIRECTS;
+  const unlocked = stakedDirects >= unlockDirects;
   if (unlocked && !referrer.is2XDailyUnlocked) update.$set.is2XDailyUnlocked = true;
 
-  const computedRank = getRankForDirects(stakedDirects);
+  const computedRank = await getRankForDirects(stakedDirects);
   const currentRank  = referrer.userRankId == null ? null : Number(referrer.userRankId);
   const promoted     = computedRank !== null && (currentRank === null || computedRank > currentRank);
   if (promoted) update.$set.userRankId = computedRank;
@@ -195,6 +232,65 @@ const onDirectStakeConfirmed = async (stake) => {
   if (!referrerId) return null;
   const firstStake = await isFirstConfirmedStake(stake);
   return syncReferrerStatus(referrerId, { creditWithdrawal: firstStake });
+};
+
+const rankFromCount = (count, thresholds) => {
+  let rank = null;
+  thresholds.forEach((threshold, idx) => {
+    if (count >= threshold) rank = idx + 1;
+  });
+  return rank;
+};
+
+/**
+ * One-time admin reset: set every user's rank and 2X unlock to exactly what
+ * their staked directs qualify them for. Unlike the nightly sync this CAN
+ * clear a rank that came from the old turnover system.
+ * No emails or gift requests are sent.
+ */
+const resetRanksToQualification = async () => {
+  const thresholds = await loadRankThresholds();
+  const confirmedIds = await Stake.distinct("userId", confirmedStakeFilter);
+  const grouped = await User.aggregate([
+    {
+      $match: {
+        _id: { $in: confirmedIds },
+        referredBy: { $ne: null },
+        status: { $ne: DEFAULT_STATUS.BANNED },
+      },
+    },
+    { $group: { _id: "$referredBy", directs: { $sum: 1 } } },
+  ]);
+  const directsBySponsor = new Map(grouped.map((g) => [String(g._id), g.directs]));
+
+  const users = await User.find({ role: { $ne: "admin" } })
+    .select("userRankId is2XDailyUnlocked")
+    .lean();
+
+  const ops = [];
+  let cleared = 0;
+  for (const user of users) {
+    const directs = directsBySponsor.get(String(user._id)) || 0;
+    const rank = rankFromCount(directs, thresholds);
+    const unlocked = directs >= thresholds[0];
+    const currentRank = user.userRankId == null ? null : Number(user.userRankId);
+    if (currentRank === rank && Boolean(user.is2XDailyUnlocked) === unlocked) continue;
+    if (currentRank != null && rank == null) cleared++;
+    ops.push({
+      updateOne: {
+        filter: { _id: user._id },
+        update: { $set: { userRankId: rank, is2XDailyUnlocked: unlocked } },
+      },
+    });
+  }
+  if (ops.length > 0) await User.bulkWrite(ops, { ordered: false });
+
+  return {
+    examined: users.length,
+    changed: ops.length,
+    cleared,
+    qualifiedSponsors: grouped.length,
+  };
 };
 
 /** Daily safety-net: re-sync every sponsor (promotion only, no credits). */
@@ -248,9 +344,12 @@ module.exports = {
   countStakedDirects,
   getRankForDirects,
   getNextRankTarget,
+  getUnlockDirects,
+  invalidateRankCache,
   syncReferrerStatus,
   onDirectStakeConfirmed,
   recalculateAllRanks,
+  resetRanksToQualification,
   getWithdrawalWindowRemainingMs,
   consumeWithdrawalQuota,
 };

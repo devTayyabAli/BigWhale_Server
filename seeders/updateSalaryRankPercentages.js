@@ -24,7 +24,8 @@
  * Safe to re-run — uses updateOne with no side-effects beyond the field change.
  */
 
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const mongoose = require("mongoose");
 const Rank     = require("../models/rank.model");
 const { FAST_TRACK } = require("../config/constants");
@@ -42,10 +43,13 @@ const SALARY_RANK_PERCENTAGES = FAST_TRACK.RANK_DIRECT_THRESHOLDS.map((directs, 
 }));
 
 const run = async () => {
-  await mongoose.connect(process.env.DB_URI || process.env.MONGO_URI, {
-    useNewUrlParser:    true,
-    useUnifiedTopology: true,
-  });
+  const uri = process.env.MONGO_DATABASE_BASE_URI;
+  if (!uri) {
+    throw new Error(
+      "MONGO_DATABASE_BASE_URI is missing. Add it to Server/.env (same variable the API uses)."
+    );
+  }
+  await mongoose.connect(uri);
 
   console.log("✅ Connected to MongoDB");
   console.log("📦 Updating Salary Rank directTeam & rewardPercentage values...\n");
