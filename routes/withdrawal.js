@@ -13,6 +13,11 @@ router.post(
   WithdrawalController.addWithdrawal
 );
 router.post(
+  "/salary",
+  createWithdrawalValidation,
+  WithdrawalController.withdrawSalary
+);
+router.post(
   "/complete/:id",
   //  checkIfAuthenticated,
   completeWithdrawalValidation,

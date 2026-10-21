@@ -374,12 +374,14 @@ const handleWithdrawalEvent = async (txHash) => {
         );
       }
 
-      // ── Salary Rank distribution (20% of total withdrawal) ─────────────
-      // The full withdrawal amount before the split = amount / payoutRatio
-      const totalWithdrawalForSalary = withdrawal.amount / payoutRatio;
-      salaryRankService.distributeSalaryRankReward(totalWithdrawalForSalary).catch((err) =>
-        console.error("Salary rank distribution failed (contract withdrawal):", err?.message)
-      );
+      // Salary withdrawals are paid in full and do not feed the pool again.
+      if (withdrawal.kind !== "salary") {
+        // The full withdrawal amount before the split = amount / payoutRatio
+        const totalWithdrawalForSalary = withdrawal.amount / payoutRatio;
+        salaryRankService.distributeSalaryRankReward(totalWithdrawalForSalary).catch((err) =>
+          console.error("Salary rank distribution failed (contract withdrawal):", err?.message)
+        );
+      }
 
       // Reinvestment stake is ONLY done for legacy 50% withdrawals
       if (payoutPct === 50) {
@@ -424,7 +426,7 @@ const updateStake = (query, payload) => {
 const getWithdrawalAmount = async (req, response) => {
   const { userID } = req.params;
   const userId = new ObjectId(userID);
-  const { combinedTotalAmount, stakingAmount, otherRewardAmount } =
+  const { combinedTotalAmount, stakingAmount, otherRewardAmount, salaryAvailable } =
     await calculateTotalWithdrawalAmount(userId);
 
   // Fetch the platform withdrawal deduction percentage (e.g. 5) in parallel
@@ -455,6 +457,7 @@ const getWithdrawalAmount = async (req, response) => {
     combinedTotalAmount,
     stakingAmount,
     otherRewardAmount,
+    salaryAvailable: Number(salaryAvailable || 0),
     networkFeeKgc,
     withdrawalDeductionPercentage,
   };
@@ -473,6 +476,8 @@ const calculateTotalWithdrawalAmount = async (_id) => {
     partialWithdrawalAmountArr,
     withdrawalAmountArr,
     newWithdrawals,
+    salaryWithdrawals,
+    salaryPartialArr,
   ] = await Promise.all([
     referral.stakingRewardAmount(_id),
     referral.referralLevelAmount(_id, OTHER_REWARD.INCOME_LEVEL),
@@ -486,6 +491,25 @@ const calculateTotalWithdrawalAmount = async (_id) => {
       status: DEFAULT_STATUS.ACTIVE,
       payoutPercentage: 80,
     }).lean(),
+    Withdrawal.find({
+      userId: _id,
+      kind: "salary",
+      status: { $in: [DEFAULT_STATUS.ACTIVE, DEFAULT_STATUS.PENDING] },
+    }).select("amount status").lean(),
+    PartialWithdrawal.aggregate([
+      { $match: { userId: _id, status: DEFAULT_STATUS.ACTIVE } },
+      {
+        $lookup: {
+          from: "withdrawals",
+          localField: "withdrawalId",
+          foreignField: "_id",
+          as: "withdrawal",
+        },
+      },
+      { $unwind: "$withdrawal" },
+      { $match: { "withdrawal.kind": "salary" } },
+      { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
+    ]),
   ]);
 
   const totalNewNet = newWithdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
@@ -506,15 +530,33 @@ const calculateTotalWithdrawalAmount = async (_id) => {
   const stakingAmount = helper.convertNegativeToZero(
     (stakingRewardBonus + instantRewardBonus) - grossContractAmount
   );
-  const otherRewardAmount = helper.convertNegativeToZero(
-    leadershipBonus + referralLevelBonus + salaryRankBonus - (partialWithdrawalAmountArr[0]?.totalAmount || 0)
+  const partials = partialWithdrawalAmountArr[0]?.totalAmount || 0;
+  const otherRewardAmountRaw = helper.convertNegativeToZero(
+    leadershipBonus + referralLevelBonus + salaryRankBonus - partials
   );
-  const combinedTotalAmount = helper.convertNegativeToZero(availableBonusBalance);
+
+  // Salary is withdrawn on its own button at 100%. Take the still-unpaid
+  // salary out of the normal (20% fee) balance so it cannot be withdrawn twice.
+  const salaryReserved = salaryWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+  const activeSalaryPaid = (salaryPartialArr[0]?.totalAmount) || 0;
+  const otherPartials = Math.max(0, partials - activeSalaryPaid);
+  const nonSalaryOther = leadershipBonus + referralLevelBonus;
+  const salaryConsumedMixed = Math.max(0, otherPartials - nonSalaryOther);
+  const salaryStillInNormal = helper.convertNegativeToZero(
+    salaryRankBonus - salaryConsumedMixed - activeSalaryPaid
+  );
+  const salaryAvailable = helper.convertNegativeToZero(
+    salaryRankBonus - salaryConsumedMixed - salaryReserved
+  );
+
+  const otherRewardAmount = helper.convertNegativeToZero(otherRewardAmountRaw - salaryStillInNormal);
+  const combinedTotalAmount = helper.convertNegativeToZero(availableBonusBalance - salaryStillInNormal);
 
   return {
     combinedTotalAmount: Number(combinedTotalAmount),
     stakingAmount,
     otherRewardAmount,
+    salaryAvailable: Number(salaryAvailable),
     stakingRewardBonus,
     referralLevelBonus,
     leadershipBonus,
@@ -701,15 +743,135 @@ const withdrawAmount = async (
   toAddress,
   amount,
   userId,
-  partialWithdrawalAmountId
+  partialWithdrawalAmountId,
+  options
 ) => {
   const receipt = await transferFunds(
     toAddress,
     amount,
     userId,
-    partialWithdrawalAmountId
+    partialWithdrawalAmountId,
+    options
   );
   return receipt;
+};
+
+/**
+ * Pay a rank holder's salary straight to their wallet.
+ * No 20% fee, no 10 BW chunk, and no direct-joining credit.
+ */
+const withdrawSalary = async (req, response) => {
+  const { userId } = req.body;
+  const user = await User.findById(userId);
+  if (!user) {
+    response.success = false;
+    response.message = "User not found";
+    response.status = 404;
+    return response;
+  }
+  if (!user.walletAddress || !/^0x[0-9a-fA-F]{40}$/.test(user.walletAddress)) {
+    response.success = false;
+    response.message = "Add a wallet address before withdrawing salary.";
+    response.status = 400;
+    return response;
+  }
+
+  const staleBefore = new Date(Date.now() - FAST_TRACK.PENDING_WITHDRAWAL_STALE_MINUTES * 60 * 1000);
+  const stale = await Withdrawal.find({
+    userId,
+    kind: "salary",
+    status: DEFAULT_STATUS.PENDING,
+    transactionId: null,
+    createdAt: { $lt: staleBefore },
+  }).select("_id");
+  if (stale.length > 0) {
+    const ids = stale.map((doc) => doc._id);
+    await PartialWithdrawal.deleteMany({ withdrawalId: { $in: ids } });
+    await Withdrawal.deleteMany({ _id: { $in: ids } });
+  }
+
+  const inFlight = await Withdrawal.exists({
+    userId,
+    kind: "salary",
+    status: DEFAULT_STATUS.PENDING,
+  });
+  if (inFlight) {
+    response.success = false;
+    response.message = "A salary withdrawal is already in progress.";
+    response.status = 400;
+    return response;
+  }
+
+  const totals = await calculateTotalWithdrawalAmount(new ObjectId(userId));
+  const available = Number(totals.salaryAvailable || 0);
+  const requested = Number(req.body.amount);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    response.success = false;
+    response.message = "Enter the salary amount to withdraw.";
+    response.status = 400;
+    return response;
+  }
+  if (requested - available > 0.01) {
+    response.success = false;
+    response.message = "Amount is higher than the available salary.";
+    response.status = 400;
+    return response;
+  }
+  const amount = Number(Math.min(requested, available).toFixed(8));
+  if (!(amount > 0)) {
+    response.success = false;
+    response.message = "No salary is available to withdraw.";
+    response.status = 400;
+    return response;
+  }
+
+  const adminBlnc = await getAdminBlnc();
+  if (adminBlnc < amount) {
+    response.success = false;
+    response.message = "Salary payout is temporarily unavailable. Please try again later.";
+    response.status = 200;
+    return response;
+  }
+
+  const withdrawal = await Withdrawal.create({
+    userId,
+    amount,
+    payoutPercentage: 100,
+    requiredJoinings: 0,
+    kind: "salary",
+    status: DEFAULT_STATUS.PENDING,
+  });
+  const partial = await createPartialWithdrawal({
+    userId,
+    amount,
+    withdrawalId: withdrawal._id,
+  });
+
+  const receipt = await withdrawAmount(
+    user.walletAddress,
+    amount,
+    userId,
+    partial._id,
+    { deductNetworkFee: false }
+  );
+
+  if (!receipt || !receipt.transactionHash) {
+    await PartialWithdrawal.deleteOne({ _id: partial._id });
+    await Withdrawal.deleteOne({ _id: withdrawal._id });
+    response.success = false;
+    response.message = "Salary transfer failed. Nothing was deducted. Please try again.";
+    response.status = 400;
+    return response;
+  }
+
+  await Withdrawal.updateOne({ _id: withdrawal._id }, { $set: { status: DEFAULT_STATUS.ACTIVE } });
+  await updatePartialWithdrawal(receipt.transactionHash);
+
+  response.success = true;
+  response.message = "Salary withdrawn in full. No fee was charged.";
+  response.status = 201;
+  response.data = { amount, payoutPercentage: 100 };
+  return response;
 };
 const updatePartialWithdrawal = async (txHash) => {
   const tx = await Transaction.findOneAndUpdate(
@@ -724,10 +886,12 @@ const updatePartialWithdrawal = async (txHash) => {
       { status: DEFAULT_STATUS.ACTIVE }
     ).populate("withdrawalId");
     if (partialWithdrawal) {
-      // ── Salary Rank distribution (partial withdrawal) ───────────────────
-      salaryRankService.distributeSalaryRankReward(partialWithdrawal.amount).catch((err) =>
-        console.error("Salary rank distribution failed (partial withdrawal):", err?.message)
-      );
+      // Salary withdrawals are paid in full: no 20% is taken back into the pool.
+      if (partialWithdrawal.withdrawalId?.kind !== "salary") {
+        salaryRankService.distributeSalaryRankReward(partialWithdrawal.amount).catch((err) =>
+          console.error("Salary rank distribution failed (partial withdrawal):", err?.message)
+        );
+      }
 
       // Reinvestment stake for partial withdrawal is ONLY done for legacy 50% withdrawals
       const payoutPct = partialWithdrawal.withdrawalId?.payoutPercentage ?? 80;
@@ -815,10 +979,15 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
 
       const pct = withdrawal.payoutPercentage || 50;
       const ratio = pct / 100;
+      // Salary stores the full amount on the withdrawal and again on the
+      // partial record. Adding both would show double.
+      const gross = withdrawal.kind === "salary"
+        ? (withdrawal.amount || 0)
+        : ((withdrawal.amount || 0) / ratio) + partialSum;
 
       return {
         ...withdrawal,
-        amount: ((withdrawal.amount || 0) / ratio) + partialSum, // total amount
+        amount: gross,
         partialWithdrawals: partials,
       };
     });
@@ -878,6 +1047,7 @@ module.exports = {
   totalWithdrawalAmount,
   updatePartialWithdrawal,
   calculateTotalWithdrawalAmount,
+  withdrawSalary,
   getPendingWithdrawals,
   getPendingPartialWithdrawals,
   totalPartialWithdrawalAmount,

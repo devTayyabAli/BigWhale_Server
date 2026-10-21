@@ -27,6 +27,25 @@ class StakeController {
     }
   }
 
+  static async withdrawSalary(req, res) {
+    let response = ResponseHelper.getResponse(
+      false,
+      "Something went wrong",
+      {},
+      400
+    );
+    try {
+      response = await services.withdrawalService.withdrawSalary(req, response);
+    } catch (error) {
+      console.error("Salary withdrawal error: ", error);
+      response.message = error.message || "An internal server error occurred";
+      response.status = 500;
+      response.success = false;
+    } finally {
+      return res.status(response.status).json(response);
+    }
+  }
+
   static async completeWithdrawal(req, res) {
     let response = ResponseHelper.getResponse(
       false,

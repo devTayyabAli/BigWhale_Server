@@ -23,7 +23,8 @@ const transferFunds = async (
   toAddress,
   amount,
   userId,
-  partialWithdrawalAmountId
+  partialWithdrawalAmountId,
+  { deductNetworkFee = true } = {}
 ) => {
   if (!toAddress) throw new Error("toAddress is required");
   try {
@@ -53,7 +54,9 @@ const transferFunds = async (
     const txTotalGasPriceInBNB = web3.utils.fromWei(txTotalGasPriceWei.toString(), "ether");
     const UDCToDeduct = Number(txTotalGasPriceInBNB) * OneUSDC;
     const KGCToDeduct = await getKGCAmount(UDCToDeduct);
-    let tranferAmount=Number((Number(amount) - KGCToDeduct)?.toFixed(8))
+    let tranferAmount = deductNetworkFee
+      ? Number((Number(amount) - KGCToDeduct)?.toFixed(8))
+      : Number(Number(amount)?.toFixed(8));
     if(tranferAmount<=0){
       tranferAmount=Number(Number(amount)?.toFixed(8))
     }

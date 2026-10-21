@@ -17,6 +17,12 @@ const withdrawalSchema = new mongoose.Schema({
     type: Number,
     default: 50,
   },
+  // "income" follows the 10 BW / 20% fee rules. "salary" is paid in full.
+  kind: {
+    type: String,
+    enum: ["income", "salary"],
+    default: "income",
+  },
   transactionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Transaction', // Reference to the Transaction model
