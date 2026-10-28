@@ -102,7 +102,25 @@ const validateFastTrackWithdrawal = async (user, ruleAmount) => {
   return null;
 };
 
+// Serialises withdrawal requests per user so a double-tap / second tab can't
+// pass validation twice and send funds twice. The lock is released once the
+// Withdrawal record is saved or the server-side payout has consumed the quota.
 const create = async (req, response) => {
+  const lockUserId = req.body?.userId;
+  if (!lockUserId || !(await fastTrack.acquireWithdrawalLock(lockUserId))) {
+    response.success = false;
+    response.message = "A withdrawal request is already being processed. Please wait up to 2 minutes and try again.";
+    response.status = 429;
+    return response;
+  }
+  try {
+    return await createUnlocked(req, response);
+  } finally {
+    await fastTrack.releaseWithdrawalLock(lockUserId).catch(() => {});
+  }
+};
+
+const createUnlocked = async (req, response) => {
   const { userId, amount, fiatAmount } = req.body;
 
   const user = await User.findById(userId);
