@@ -115,6 +115,15 @@ const countStakedDirects = async (userId) => {
   return stakedIds.length;
 };
 
+/**
+ * Every user registered under this sponsor, whatever their status (pending
+ * users have a referredBy but no TeamMember row until registration completes).
+ */
+const countJoinedDirects = async (userId) => {
+  if (!userId) return 0;
+  return User.countDocuments({ referredBy: userId });
+};
+
 /** Rank (1..7) for a given staked-direct count, or null. */
 const getRankForDirects = async (count) => {
   const thresholds = await loadRankThresholds();
@@ -321,19 +330,38 @@ const getWithdrawalWindowRemainingMs = (lastWithdrawalAt) => {
  * Clamps unusedDirectCount at 0 and stamps the rolling-window timestamp.
  */
 const consumeWithdrawalQuota = async (userId, joinings = 1) => {
-  const user = await User.findById(userId).select("unusedDirectCount").lean();
-  if (!user) return;
-  const current = Number(user.unusedDirectCount || 0);
-  await User.updateOne(
-    { _id: userId },
-    {
-      $set: {
-        unusedDirectCount: Math.max(0, current - Number(joinings || 0)),
-        lastWithdrawalAt: new Date(),
-        dailyWithdrawalCount: 1,
-      },
-    }
+  const need = Number(joinings || 0);
+  const stamp = { lastWithdrawalAt: new Date(), dailyWithdrawalCount: 1 };
+  // Atomic decrement; if credits fell short, clamp to 0 instead of going negative.
+  const res = await User.updateOne(
+    { _id: userId, unusedDirectCount: { $gte: need } },
+    { $inc: { unusedDirectCount: -need }, $set: stamp }
   );
+  if (res.matchedCount === 0) {
+    await User.updateOne({ _id: userId }, { $set: { ...stamp, unusedDirectCount: 0 } });
+  }
+};
+
+const WITHDRAWAL_LOCK_MS = 2 * 60 * 1000;
+
+/** Atomically take the per-user withdrawal lock. Returns false if another request holds it. */
+const acquireWithdrawalLock = async (userId) => {
+  const res = await User.updateOne(
+    {
+      _id: userId,
+      $or: [
+        { withdrawalLockAt: null },
+        { withdrawalLockAt: { $exists: false } },
+        { withdrawalLockAt: { $lt: new Date(Date.now() - WITHDRAWAL_LOCK_MS) } },
+      ],
+    },
+    { $set: { withdrawalLockAt: new Date() } }
+  );
+  return res.matchedCount > 0;
+};
+
+const releaseWithdrawalLock = async (userId) => {
+  await User.updateOne({ _id: userId }, { $set: { withdrawalLockAt: null } });
 };
 
 module.exports = {
@@ -342,6 +370,7 @@ module.exports = {
   isFirstConfirmedStake,
   hasQualifyingStake,
   countStakedDirects,
+  countJoinedDirects,
   getRankForDirects,
   getNextRankTarget,
   getUnlockDirects,
@@ -352,4 +381,6 @@ module.exports = {
   resetRanksToQualification,
   getWithdrawalWindowRemainingMs,
   consumeWithdrawalQuota,
+  acquireWithdrawalLock,
+  releaseWithdrawalLock,
 };

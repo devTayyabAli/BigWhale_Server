@@ -246,6 +246,11 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Short-lived mutex so two simultaneous withdrawal requests can't both pass validation.
+    withdrawalLockAt: {
+      type: Date,
+      default: null,
+    },
 
   },
   {
