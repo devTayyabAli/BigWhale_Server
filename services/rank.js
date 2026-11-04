@@ -7,80 +7,47 @@ const { DEFAULT_STATUS } = require("../config/constants");
 const { ObjectId } = require("mongoose").Types;
 const Team = require("../models/team.model");
 const teamService = require("./team");
+const fastTrack = require("./fastTrack");
 
 let currentDate = moment().toDate();
 
+const RANK_NAMES = {
+  1: "Bronze Leader",
+  2: "Silver Leader",
+  3: "Gold Leader",
+  4: "Platinum Leader",
+  5: "Diamond Leader",
+  6: "Crown Leader",
+  7: "BigWhale Legend",
+};
+
+// 2X Fast-Track rank status: a rank is earned by STAKED directs and is lifetime
+// (promotion-only), so a user at rank N is qualified for every rank <= N.
 const getStakeRankDetails = async (req, response) => {
   const { userId } = req.params;
-  const allRank = [];
-  const systemRanks = await Rank.find({});
-  const userDetails = await getUserDetailsForBonus(userId);
-  const rankDetail = await processDataForRankDetails(userDetails, currentDate);
-  const userObject = rankDetail[0]?.users || userDetails[0];
-  const rankObject = rankDetail[0]?.rank;
+  const [systemRanks, stakedDirects, user] = await Promise.all([
+    Rank.find({ starKey: { $gte: 1, $lte: 7 } }).sort({ starKey: 1 }).lean(),
+    fastTrack.countStakedDirects(userId).catch(() => 0),
+    User.findById(userId).select("userRankId").lean(),
+  ]);
+  const currentRank = Number(user?.userRankId || 0);
 
-  const qualification = userObject?.qualifications?.find((value) =>
-    rankObject?.rankId && new ObjectId(value?.id).equals(rankObject?.rankId)
-  );
-
-  for (let rank of systemRanks) {
-    let dataObject = {
-      title: rank.title,
-      selfBusiness: {
-        value: userObject?.stakes?.amount || 0,
-        status: (userObject?.stakes?.amount || 0) >= rank.selfBusiness ? true : false,
-        requiredValue: rank?.selfBusiness,
-      },
-      directBussiness: {
-        value: userObject?.directBussiness || 0,
-        status: (userObject?.directBussiness || 0) >= rank.directBussiness ? true : false,
-        requiredValue: rank?.directBussiness,
-      },
+  const allRank = systemRanks.map((rank) => {
+    const required = Number(rank.directTeam || 0);
+    const reached = stakedDirects >= required;
+    return {
+      title: RANK_NAMES[rank.starKey] || rank.title,
+      imageKey: rank.title,
+      starKey: rank.starKey,
+      rewardPercentage: rank.rewardPercentage,
       directTeam: {
-        value: userObject?.directTeamCount || 0,
-        status: (userObject?.directTeamCount || 0) >= rank.directTeam ? true : false,
-        requiredValue: rank?.directTeam,
+        value: stakedDirects,
+        status: reached,
+        requiredValue: required,
       },
-      totalTeamBusiness: {
-        value: userObject?.totalTeamBusiness || 0,
-        status: (userObject?.totalTeamBusiness || 0) >= rank.totalTeamBusiness ? true : false,
-        requiredValue: rank?.totalTeamBusiness,
-      },
-      totalTeamSize: {
-        value: userObject?.teamSize || 0,
-        status: (userObject?.teamSize || 0) >= rank.totalTeamSize ? true : false,
-        requiredValue: rank?.totalTeamSize,
-      }
+      qualified: currentRank >= rank.starKey || reached,
     };
-
-    dataObject.qualification = {
-      value:
-        qualification && rank?._id.equals(rankObject?._id)
-          ? qualification?.count
-          : 0,
-      status: qualification && rank?._id.equals(rankObject?._id) ? true : false,
-      requiredValue: rank?.referralCount,
-    };
-
-    const selectedObjects = Object.entries(dataObject)
-      .filter(([key, value]) => {
-        if (
-          ["1 star reward", "2 star reward", "3 star reward"].includes(
-            rank.title
-          )
-        ) {
-          return key !== "qualification" && typeof value === "object";
-        } else {
-          return typeof value === "object";
-        }
-      })
-      .map(([key, obj]) => obj);
-    dataObject.qualified = selectedObjects.every((obj) => obj.status === true)
-      ? true
-      : false;
-
-    allRank.push(dataObject);
-  }
+  });
 
   response.success = true;
   response.data = allRank;

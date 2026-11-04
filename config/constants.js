@@ -150,10 +150,18 @@ const FAST_TRACK = {
   MAX_WITHDRAWALS_PER_WINDOW: 1,   // 1 withdrawal per rolling window
   WITHDRAWAL_WINDOW_HOURS: 24,     // rolling 24h window
   PENDING_WITHDRAWAL_STALE_MINUTES: 10, // pending w/o tx older than this is discarded
-  SALARY_POOL_PERCENTAGE: 20,      // 20% of every withdrawal feeds the salary pool
+  SALARY_POOL_PERCENTAGE: 50,      // 50% of every withdrawal feeds the salary pool (other 50% is auto-restaked)
   RESTAKE_GRACE_HOURS: 48,         // after a 2X payout, user stays "staked" this long to re-stake
   // Direct-count thresholds for Rank 1..7 (5^N)
   RANK_DIRECT_THRESHOLDS: [5, 25, 125, 625, 3125, 15625, 78125],
+  // Withdrawal cap per 24h for Rank 1..7. Users without a rank use the default.
+  RANK_WITHDRAWAL_LIMITS: [10, 10, 10, 10, 10, 10, 10], // every withdrawal is exactly 10 BW, any rank
+  DEFAULT_WITHDRAWAL_LIMIT: 10,
+  MIN_WITHDRAWAL: 10,
+  // Every withdrawal: 50% auto-restaked, 50% to the salary pool. Users only receive cash via Salary claim.
+  RESTAKE_PERCENTAGE: 50,
+  // Marker stored in Withdrawal.payoutPercentage for server-paid (user gets 30%) withdrawals.
+  SERVER_PAID_PAYOUT_PCT: 30,
 };
 const EMAIL_SUBJECT = {
   REGISTER: "Account Verification",

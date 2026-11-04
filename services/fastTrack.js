@@ -342,6 +342,12 @@ const consumeWithdrawalQuota = async (userId, joinings = 1) => {
   }
 };
 
+/** Max BW per 24h for a user's current rank (rank 0 / none uses the default). */
+const getWithdrawalLimit = (rankId) => {
+  const rank = Number(rankId || 0);
+  return FAST_TRACK.RANK_WITHDRAWAL_LIMITS[rank - 1] ?? FAST_TRACK.DEFAULT_WITHDRAWAL_LIMIT;
+};
+
 const WITHDRAWAL_LOCK_MS = 2 * 60 * 1000;
 
 /** Atomically take the per-user withdrawal lock. Returns false if another request holds it. */
@@ -381,6 +387,7 @@ module.exports = {
   resetRanksToQualification,
   getWithdrawalWindowRemainingMs,
   consumeWithdrawalQuota,
+  getWithdrawalLimit,
   acquireWithdrawalLock,
   releaseWithdrawalLock,
 };

@@ -42,6 +42,20 @@ const withdrawalSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  // Server-paid withdrawals: `amount` is what the user received; these hold the rest of the split.
+  grossAmount: {
+    type: Number,
+    default: 0,
+  },
+  restakeAmount: {
+    type: Number,
+    default: 0,
+  },
+  restakeStatus: {
+    type: String,
+    enum: ["none", "submitted", "failed"],
+    default: "none",
+  },
 },
 { 
   timestamps: true,

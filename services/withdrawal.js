@@ -14,8 +14,10 @@ const {
   OTHER_REWARD,
   SETTING,
   FAST_TRACK,
+  STAKE_TYPE,
 } = require("../config/constants.js");
 const fastTrack = require("./fastTrack");
+const CronLog = require("../models/cronLogs.model");
 const Transaction = require("../models/transaction.model.js");
 const socket = require("../helpers/sockets");
 const { transferFunds, getWithdrawalAmountFromContract, getAdminBlnc, stakeTokenOnChain, estimateTransferNetworkFee } = require("../helpers/web3.js");
@@ -27,38 +29,33 @@ const salaryRankService = require("./salaryRank");
 const { getSettingWithKey } = require("../helpers/setting");
 
 /**
- * 2X Fast-Track universal withdrawal rules (apply to every income type):
- *  • exactly FAST_TRACK.WITHDRAWAL_CHUNK (10 BW) per withdrawal
- *  • MAX_WITHDRAWALS_PER_WINDOW (1) per rolling WITHDRAWAL_WINDOW_HOURS (24h)
- *  • 1 unused direct-joining credit per withdrawal
- *  • quota/credit are consumed only when the withdrawal is CONFIRMED
- *    (handleWithdrawalEvent / makePartialPayment), never at request time,
- *    so a cancelled wallet transaction costs the user nothing.
+ * 2X Fast-Track withdrawal rules:
+ *  • each withdrawal is exactly FAST_TRACK.WITHDRAWAL_CHUNK (10 BW)
+ *  • unlimited withdrawals, no 24h window and no new-joining requirement
+ *  • the user must have completed the 5 staked directs (2X unlocked)
  *
- * The chunk rule is validated on `fiatAmount` (USD value the user typed)
+ * The amount rule is validated on `fiatAmount` (USD value the user typed)
  * when the client sends it, otherwise on `amount` (token quantity).
  */
 const validateFastTrackWithdrawal = async (user, ruleAmount) => {
+  const tol = FAST_TRACK.AMOUNT_TOLERANCE;
   const chunk = FAST_TRACK.WITHDRAWAL_CHUNK;
-  const maxPerRequest = chunk * FAST_TRACK.MAX_WITHDRAWALS_PER_WINDOW;
 
   if (!ruleAmount || ruleAmount <= 0) {
     return "Invalid withdrawal amount.";
   }
-  const chunks = Math.round(ruleAmount / chunk);
-  if (chunks < 1 || Math.abs(ruleAmount - chunks * chunk) > FAST_TRACK.AMOUNT_TOLERANCE) {
-    return `Withdrawal is only allowed in chunks of ${chunk} BW.`;
-  }
-  if (ruleAmount > maxPerRequest + FAST_TRACK.AMOUNT_TOLERANCE) {
-    return `Only ${FAST_TRACK.MAX_WITHDRAWALS_PER_WINDOW} withdrawal of ${chunk} BW is allowed per ${FAST_TRACK.WITHDRAWAL_WINDOW_HOURS} hours.`;
+  if (Math.abs(ruleAmount - chunk) > tol) {
+    return `Each withdrawal must be exactly ${chunk} BW.`;
   }
 
-  // Rolling window — based on the last CONFIRMED withdrawal.
-  const remainingMs = fastTrack.getWithdrawalWindowRemainingMs(user.lastWithdrawalAt);
-  if (remainingMs > 0) {
-    const h = Math.floor(remainingMs / 3600000);
-    const m = Math.ceil((remainingMs % 3600000) / 60000);
-    return `Withdrawal limit reached. Next ${chunk} BW withdrawal available in ${h}h ${m}m.`;
+  if (!user.is2XDailyUnlocked) {
+    const [staked, needed] = await Promise.all([
+      fastTrack.countStakedDirects(user._id).catch(() => 0),
+      fastTrack.getUnlockDirects(),
+    ]);
+    if (staked < needed) {
+      return `Withdrawal unlocks after ${needed} staked directs (you have ${staked}).`;
+    }
   }
 
   // In-flight guard — one fast-track withdrawal at a time.
@@ -91,12 +88,6 @@ const validateFastTrackWithdrawal = async (user, ruleAmount) => {
       (new Date(inFlight.createdAt).getTime() + FAST_TRACK.PENDING_WITHDRAWAL_STALE_MINUTES * 60000 - Date.now()) / 60000
     );
     return `A withdrawal request is already in progress. Complete it in your wallet or try again in ${Math.max(1, waitMin)} minute(s).`;
-  }
-
-  // 1 new joining credit per chunk.
-  const available = Number(user.unusedDirectCount || 0);
-  if (available < chunks) {
-    return `Withdrawal requires 1 new direct joining (5 BW stake) per ${chunk} BW (Required: ${chunks}, Available: ${available}).`;
   }
 
   return null;
@@ -140,7 +131,13 @@ const createUnlocked = async (req, response) => {
     response.status = 400;
     return response;
   }
-  const requiredJoinings = Math.round(ruleAmount / FAST_TRACK.WITHDRAWAL_CHUNK);
+  const requiredJoinings = 0; // no new-direct requirement any more
+
+  // Default mode: server pays the user's share and auto-restakes. Set
+  // WITHDRAWAL_MODE=contract to fall back to the old on-chain withdrawAmount flow.
+  if (process.env.WITHDRAWAL_MODE !== "contract") {
+    return createServerPaid({ user, userId, amount }, response);
+  }
 
   const { stakingAmount, otherRewardAmount } =
     await calculateTotalWithdrawalAmount(new ObjectId(userId));
@@ -211,6 +208,113 @@ const createUnlocked = async (req, response) => {
   };
   return response;
 };
+const round8 = (n) => Number(Number(n).toFixed(8));
+
+const auditWithdrawal = (title, detail) =>
+  CronLog.create({ title, error: detail }).catch((e) =>
+    console.error("withdrawal audit failed:", e?.message)
+  );
+
+/**
+ * Split of every withdrawal: RESTAKE_PERCENTAGE is auto-restaked and the rest
+ * goes to the salary pool. The user receives no cash here; cash only comes
+ * from claiming salary (withdrawSalary).
+ */
+const splitWithdrawal = (gross) => {
+  const restake = round8(gross * (FAST_TRACK.RESTAKE_PERCENTAGE / 100));
+  const pool = round8(gross - restake);
+  return { restake, pool };
+};
+
+/**
+ * Fast-track withdrawal: balance is debited, RESTAKE_PERCENTAGE is staked on
+ * the user's behalf and the remainder is distributed to salary-rank holders.
+ * The debit (withdrawal + 24h quota + joining credit) happens first so a crash
+ * can never double-spend; it is rolled back only if the stake was provably
+ * never broadcast.
+ */
+const createServerPaid = async ({ user, userId, amount }, response) => {
+  const fail = (message, status = 400) => {
+    response.success = false;
+    response.message = message;
+    response.status = status;
+    response.data = {};
+    return response;
+  };
+
+  if (!user.walletAddress || !/^0x[0-9a-fA-F]{40}$/.test(user.walletAddress)) {
+    return fail("Add a valid wallet address before withdrawing.");
+  }
+
+  const gross = round8(amount);
+  if (!(gross > 0)) return fail("Invalid withdrawal amount.");
+  const { restake, pool } = splitWithdrawal(gross);
+
+  const totals = await calculateTotalWithdrawalAmount(new ObjectId(userId));
+  if (gross - Number(totals.combinedTotalAmount || 0) > 0.0001) {
+    return fail("Insufficient funds");
+  }
+
+  const adminBlnc = Number(await getAdminBlnc());
+  if (adminBlnc < restake) {
+    return fail("Something went wrong please try again later", 200);
+  }
+
+  const before = {
+    unusedDirectCount: Number(user.unusedDirectCount || 0),
+    lastWithdrawalAt: user.lastWithdrawalAt || null,
+    dailyWithdrawalCount: Number(user.dailyWithdrawalCount || 0),
+  };
+
+  const withdrawal = await Withdrawal.create({
+    userId,
+    amount: 0, // cash received by the user: none, salary is claimed separately
+    grossAmount: gross,
+    restakeAmount: restake,
+    payoutPercentage: FAST_TRACK.SERVER_PAID_PAYOUT_PCT,
+    requiredJoinings: 0,
+    status: DEFAULT_STATUS.ACTIVE,
+  });
+  await consumeQuotaOnce(withdrawal, userId);
+
+  let stake;
+  let restakeStatus = "failed";
+  try {
+    stake = await createReinvestmentStakePending(userId, restake, STAKE_TYPE.FAST_TRACK_2X);
+    const stakeReceipt = await stakeTokenOnChain(user.walletAddress, restake, userId, stake._id);
+    if (stakeReceipt?.transactionHash) restakeStatus = "submitted";
+  } catch (err) {
+    console.error("createServerPaid restake error:", err?.message);
+  }
+
+  if (restakeStatus === "failed") {
+    const fresh = stake ? await Stake.findById(stake._id).select("transactionId").lean() : null;
+    if (!fresh?.transactionId) {
+      // Nothing was broadcast: undo the debit completely.
+      if (stake) await Stake.deleteOne({ _id: stake._id });
+      await Withdrawal.deleteOne({ _id: withdrawal._id });
+      await User.updateOne({ _id: userId }, { $set: before });
+      return fail("Auto-restake failed. Nothing was deducted. Please try again.");
+    }
+    // A tx hash exists, so the stake may still confirm: keep the debit, flag it.
+    await auditWithdrawal(
+      "withdrawalRestakeFailed",
+      `Withdrawal ${withdrawal._id} (user ${userId}): ${restake} BW restake has a tx but no receipt. Verify on-chain.`
+    );
+  }
+  await Withdrawal.updateOne({ _id: withdrawal._id }, { $set: { restakeStatus } });
+
+  salaryRankService.distributeSalaryRankReward(gross).catch((err) =>
+    console.error("Salary rank distribution failed (fast-track withdrawal):", err?.message)
+  );
+
+  response.success = true;
+  response.message = `Withdrawal done: ${restake} BW auto-restaked, ${pool} BW added to the Salary pool. Claim your salary from Withdraw Salary.`;
+  response.status = 201;
+  response.data = { restakeAmount: restake, salaryPoolAmount: pool, grossAmount: gross, restakeStatus };
+  return response;
+};
+
 const makePartialPayment = async ({ userId, amount, withdrawal }, response) => {
   const partialWithdrawal = await createPartialWithdrawal({
     userId,
@@ -274,7 +378,7 @@ const createPartialWithdrawal = async (payload) => {
  * re-delivered blockchain event can never double-charge the user.
  */
 const consumeQuotaOnce = async (withdrawal, userId) => {
-  const joinings = Number(withdrawal?.requiredJoinings || 1);
+  const joinings = Number(withdrawal?.requiredJoinings ?? 0);
   const uid = userId || withdrawal?.userId?._id || withdrawal?.userId;
   if (!uid) return;
 
@@ -471,7 +575,17 @@ const getWithdrawalAmount = async (req, response) => {
   response.success = true;
   response.message = "Withdrawal amount calculated";
   response.status = 200;
+  const rankUser = await User.findById(userId).select("userRankId").lean();
+  const limit = fastTrack.getWithdrawalLimit(rankUser?.userRankId);
+  const split = {
+    limit,
+    minAmount: FAST_TRACK.MIN_WITHDRAWAL,
+    restakePct: FAST_TRACK.RESTAKE_PERCENTAGE,
+    salaryPct: FAST_TRACK.SALARY_POOL_PERCENTAGE,
+    userPct: 100 - FAST_TRACK.RESTAKE_PERCENTAGE - FAST_TRACK.SALARY_POOL_PERCENTAGE,
+  };
   response.data = {
+    fastTrack: split,
     combinedTotalAmount,
     stakingAmount,
     otherRewardAmount,
@@ -496,6 +610,7 @@ const calculateTotalWithdrawalAmount = async (_id) => {
     newWithdrawals,
     salaryWithdrawals,
     salaryPartialArr,
+    serverPaidWithdrawals,
   ] = await Promise.all([
     referral.stakingRewardAmount(_id),
     referral.referralLevelAmount(_id, OTHER_REWARD.INCOME_LEVEL),
@@ -528,8 +643,16 @@ const calculateTotalWithdrawalAmount = async (_id) => {
       { $match: { "withdrawal.kind": "salary" } },
       { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
     ]),
+    // Server-paid fast-track withdrawals never touch the on-chain counter, so
+    // their gross is debited here (staking balance first, then other income).
+    Withdrawal.find({
+      userId: _id,
+      status: DEFAULT_STATUS.ACTIVE,
+      payoutPercentage: FAST_TRACK.SERVER_PAID_PAYOUT_PCT,
+    }).select("grossAmount").lean(),
   ]);
 
+  const serverPaidGross = serverPaidWithdrawals.reduce((sum, w) => sum + (Number(w.grossAmount) || 0), 0);
   const totalNewNet = newWithdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
   const contractNet = withdrawalAmountArr[0]?.totalAmount || 0;
   const legacyNet = Math.max(0, contractNet - totalNewNet);
@@ -537,6 +660,7 @@ const calculateTotalWithdrawalAmount = async (_id) => {
 
   const withdrawalAmountToDeduct =
     grossContractAmount +
+    serverPaidGross +
     (partialWithdrawalAmountArr[0]?.totalAmount || 0);
 
   const totalBonus = helper.convertNegativeToZero(
@@ -545,16 +669,19 @@ const calculateTotalWithdrawalAmount = async (_id) => {
   const availableBonusBalance = helper.convertNegativeToZero(
     totalBonus - withdrawalAmountToDeduct
   );
-  const stakingAmount = helper.convertNegativeToZero(
+  const stakingBase = helper.convertNegativeToZero(
     (stakingRewardBonus + instantRewardBonus) - grossContractAmount
   );
+  const serverPaidFromStaking = Math.min(serverPaidGross, stakingBase);
+  const serverPaidFromOther = serverPaidGross - serverPaidFromStaking;
+  const stakingAmount = helper.convertNegativeToZero(stakingBase - serverPaidFromStaking);
   const partials = partialWithdrawalAmountArr[0]?.totalAmount || 0;
   const otherRewardAmountRaw = helper.convertNegativeToZero(
-    leadershipBonus + referralLevelBonus + salaryRankBonus - partials
+    leadershipBonus + referralLevelBonus + salaryRankBonus - partials - serverPaidFromOther
   );
 
   // Salary is withdrawn on its own button at 100%. Take the still-unpaid
-  // salary out of the normal (20% fee) balance so it cannot be withdrawn twice.
+  // salary out of the normal (income) balance so it cannot be withdrawn twice.
   const salaryReserved = salaryWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
   const activeSalaryPaid = (salaryPartialArr[0]?.totalAmount) || 0;
   const otherPartials = Math.max(0, partials - activeSalaryPaid);
@@ -1001,6 +1128,8 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
       // partial record. Adding both would show double.
       const gross = withdrawal.kind === "salary"
         ? (withdrawal.amount || 0)
+        : withdrawal.grossAmount > 0
+        ? withdrawal.grossAmount
         : ((withdrawal.amount || 0) / ratio) + partialSum;
 
       return {
@@ -1028,7 +1157,7 @@ const getWithdrawalHistoryByID = async (userId, page, limit) => {
 };
 
 
-const createReinvestmentStakePending = async (userId, amount) => {
+const createReinvestmentStakePending = async (userId, amount, stakeType) => {
   const { getSettingsWithKeys } = require("../helpers/setting");
   const settings = await getSettingsWithKeys([
     SETTING.STAKE_DURATION,
@@ -1048,6 +1177,7 @@ const createReinvestmentStakePending = async (userId, amount) => {
     endDate: momentToAdd(stakeDurationDays, stakeDurationUnit),
     rewardPercentage: stakeRewardPerDay,
     lastReward: momentFormated(),
+    ...(stakeType && { stakeType }),
   });
 };
 

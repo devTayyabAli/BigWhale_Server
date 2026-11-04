@@ -42,6 +42,7 @@ const TeamMember       = require("../models/teamMember.model");
 const IncomeLevel      = require("../models/incomeLevel.model");
 const Stake            = require("../models/stake.model");
 const referral         = require("../services/referral");
+const fastTrack        = require("../services/fastTrack");
 const helper           = require("../helpers/index");
 const { sendCronFailureEmail, sendCappingLimitEmail } = require("../helpers/mail");
 const { DEFAULT_STATUS, OTHER_REWARD }                = require("../config/constants");
@@ -90,7 +91,7 @@ const saveIncomeLevelReward = async () => {
   // Stake-reward search window — look back 24 h so we pick up rewards whose
   // createdAt is set to the stake's original time-of-day (which may be
   // slightly before the cron fired).
-  const stakeRewardLookback = new Date(momentToSubtract(24, "hours"));
+  const stakeRewardLookback = new Date(momentToSubtract(48, "hours"));
 
   // Track IDs processed in this run to avoid re-querying them in subsequent
   // batches (the $nin guard in the query handles DB-level dedup).
@@ -150,15 +151,10 @@ const saveIncomeLevelReward = async () => {
         processedUserIds.add(user._id.toString());
 
         try {
-          const stake = await Stake.findOne({
-            userId: user._id,
-            status: DEFAULT_STATUS.ACTIVE,
-          })
-            .select("_id amount")
-            .lean();
-
-          // Minimum stake threshold check
-          if (!stake || stake.amount < 0.055) {
+          // 2X Fast-Track stakes turn INACTIVE once paid, so "staked" also covers
+          // a fast-track stake paid within the re-stake grace window.
+          const isStaked = await fastTrack.hasQualifyingStake(user._id);
+          if (!isStaked) {
             console.log(`saveIncomeRewardCron: user ${user._id} skipped — no qualifying stake.`);
             await markUserProcessed(user._id, eligibilityCutoff);
             totalSkipped++;
@@ -294,7 +290,14 @@ const processUserIncomeReward = async (
           $filter: {
             input: "$stakes",
             as: "s",
-            cond: { $eq: ["$$s.status", DEFAULT_STATUS.ACTIVE] },
+            // ACTIVE stakes, or fast-track stakes paid out inside the lookback
+            // (they go INACTIVE the moment the 2X reward is created).
+            cond: {
+              $or: [
+                { $eq: ["$$s.status", DEFAULT_STATUS.ACTIVE] },
+                { $gte: ["$$s.fastTrackPaidAt", stakeRewardLookback] },
+              ],
+            },
           },
         },
       },
