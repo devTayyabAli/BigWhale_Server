@@ -18,8 +18,36 @@ async function seedRank() {
 
       if (added) console.error("Rank seeder executed successfully.");
     }
+    await migrateSalaryRankPercentages();
   } catch (error) {
     console.error("Error seeding ranks", error);
+  }
+}
+
+// Salary rank percentages are now each rank's running total of the salary pool
+// (Rank 7 = 100%). Move ranks still holding an old default over to the new
+// values; anything an admin already edited to something else is left alone.
+const NEW_SALARY_PERCENTAGES = [10, 20, 30, 42.5, 57.5, 75, 100];
+const OLD_SALARY_PERCENTAGES = [
+  [2, 4, 6, 8.5, 11.5, 15, 20], // previous % of withdrawal
+  [10, 10, 10, 12.5, 15, 17.5, 25], // interim per-rank pool slices
+  [2, 2, 2, 2.5, 3, 3.5, 5], // original legacy seed
+];
+
+async function migrateSalaryRankPercentages() {
+  for (let i = 0; i < NEW_SALARY_PERCENTAGES.length; i++) {
+    const starKey = i + 1;
+    const rank = await Rank.findOne({ starKey }).select("rewardPercentage").lean();
+    if (!rank) continue;
+    const current = Number(rank.rewardPercentage);
+    const isOldDefault = OLD_SALARY_PERCENTAGES.some((set) => set[i] === current);
+    if (isOldDefault && current !== NEW_SALARY_PERCENTAGES[i]) {
+      await Rank.updateOne(
+        { starKey },
+        { $set: { rewardPercentage: String(NEW_SALARY_PERCENTAGES[i]) } }
+      );
+      console.log(`Rank ${starKey} salary percentage ${current} -> ${NEW_SALARY_PERCENTAGES[i]}`);
+    }
   }
 }
 

@@ -5,13 +5,15 @@
  *
  * How it works:
  *  On every withdrawal, FAST_TRACK.SALARY_POOL_PERCENTAGE of the amount forms
- *  the salary pool, and the pool is split between salary rank holders
- *  (Ranks 1–7) by each rank's share of the POOL (from the Rank collection,
- *  seeded by seeders/updateSalaryRankPercentages.js):
- *    Rank 1 → 10%  Rank 2 → 10%  Rank 3 → 10%  Rank 4 → 12.5%
- *    Rank 5 → 15%  Rank 6 → 17.5% Rank 7 → 25%   (total = 100% of the pool)
+ *  the salary pool. Each Rank document stores the TOTAL pool share a holder of
+ *  that rank earns (what the Rank Status banner shows):
+ *    Rank 1 → 10%   Rank 2 → 20%   Rank 3 → 30%   Rank 4 → 42.5%
+ *    Rank 5 → 57.5% Rank 6 → 75%   Rank 7 → 100%
+ *  A holder of rank N also qualifies for every lower rank, so each rank's own
+ *  slice of the pool is the step from the previous rank:
+ *    10, 10, 10, 12.5, 15, 17.5, 25   (total = 100% of the pool)
  *
- *  Ranks with eligible holders receive their share in full. The shares total
+ *  Ranks with eligible holders receive their slice in full. The slices total
  *  100%, so the pool is never overpaid; if an admin edit pushes the total
  *  above 100% every achieved rank is scaled down proportionally.
  *    e.g. only Rank 1 & 2 achieved → 10% + 10% of the pool is paid out
@@ -129,8 +131,12 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
 
     // ── 2. Resolve eligible holders + nominal share per rank ─────────────
     const achieved = []; // { rank, pct, nominal, holders[] }
+    let previousTotal = 0;
     for (const rank of ranks) {
-      const pct = Number(rank.rewardPercentage) || 0;
+      // rewardPercentage is the running total; this rank's slice is the step up.
+      const total_pct = Number(rank.rewardPercentage) || 0;
+      const pct = Number(Math.max(0, total_pct - previousTotal).toFixed(4));
+      previousTotal = Math.max(previousTotal, total_pct);
       if (pct <= 0 || rank.starKey == null || isNaN(rank.starKey)) {
         console.warn(`distributeSalaryRankReward: rank _id=${rank._id} has invalid starKey/rewardPercentage — skipping.`);
         continue;

@@ -52,8 +52,10 @@ const validUserId = (userId, res) => {
 
 /** Nominal rank percentages, the 20% pool, and the live scale factor. */
 const salaryMath = (ranks) => {
-  const nominalSum = ranks.reduce((sum, r) => sum + (Number(r.rewardPercentage) || 0), 0);
-  const pool = 100; // rank percentages are shares of the salary pool
+  // Rank percentages are running totals of the salary pool (Rank 7 = 100%),
+  // so the figure that must fit in the pool is the highest one.
+  const nominalSum = ranks.reduce((max, r) => Math.max(max, Number(r.rewardPercentage) || 0), 0);
+  const pool = 100;
   const scale = nominalSum > pool && nominalSum > 0 ? pool / nominalSum : 1;
   return { nominalSum: Number(nominalSum.toFixed(4)), poolPercentage: pool, scale };
 };
@@ -115,6 +117,12 @@ const updateRanks = async (req, res) => {
         return bad(res, `Rank ${starKey}: direct members must be a whole number of 1 or more.`);
       }
       updates.push({ starKey, pct, directs });
+    }
+    const ordered = [...updates].sort((a, b) => a.starKey - b.starKey);
+    for (let i = 1; i < ordered.length; i++) {
+      if (ordered[i].pct < ordered[i - 1].pct) {
+        return bad(res, `Rank ${ordered[i].starKey} percentage cannot be lower than Rank ${ordered[i - 1].starKey}.`);
+      }
     }
 
     for (const u of updates) {
