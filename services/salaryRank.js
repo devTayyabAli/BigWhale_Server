@@ -4,22 +4,18 @@
  * Salary Rank Distribution Service
  *
  * How it works:
- *  On every confirmed withdrawal, 20% of the total amount is distributed
- *  as "Lifetime Salary" to active salary rank holders (Ranks 1–7).
+ *  On every withdrawal, FAST_TRACK.SALARY_POOL_PERCENTAGE of the amount forms
+ *  the salary pool, and the pool is split between salary rank holders
+ *  (Ranks 1–7) by each rank's share of the POOL (from the Rank collection,
+ *  seeded by seeders/updateSalaryRankPercentages.js):
+ *    Rank 1 → 10%  Rank 2 → 10%  Rank 3 → 10%  Rank 4 → 12.5%
+ *    Rank 5 → 15%  Rank 6 → 17.5% Rank 7 → 25%   (total = 100% of the pool)
  *
- *  Each rank has a nominal percentage of the withdrawal (from the Rank
- *  collection, seeded by seeders/updateSalaryRankPercentages.js):
- *    Rank 1 → 2%    Rank 2 → 4%    Rank 3 → 6%    Rank 4 → 8.5%
- *    Rank 5 → 11.5% Rank 6 → 15%   Rank 7 → 20%   (nominal sum = 67%)
- *
- *  SOLVENCY CAP: the company only retains FAST_TRACK.SALARY_POOL_PERCENTAGE
- *  (20%) of each withdrawal, so the total actually paid can never exceed
- *  that. Ranks that currently have eligible holders receive their nominal
- *  share in full while the sum of achieved ranks' nominal shares fits inside
- *  20%; once it exceeds 20% every achieved rank is scaled down
- *  proportionally so the payout equals exactly 20%.
- *    e.g. only Rank 1 & 2 achieved → 2% + 4% = 6% paid as-is (14% to company)
- *         all 7 achieved → 67% scaled to 20% (Rank 1 gets 2/67×20 ≈ 0.6%)
+ *  Ranks with eligible holders receive their share in full. The shares total
+ *  100%, so the pool is never overpaid; if an admin edit pushes the total
+ *  above 100% every achieved rank is scaled down proportionally.
+ *    e.g. only Rank 1 & 2 achieved → 10% + 10% of the pool is paid out
+ *         all 7 achieved → the whole pool is paid out
  *
  *  If multiple users hold the same rank they SPLIT that rank's pool equally.
  *
@@ -164,12 +160,12 @@ const distributeSalaryRankReward = async (totalWithdrawalAmount) => {
       achieved.push({
         rank,
         pct,
-        nominal: Number((total * (pct / 100)).toFixed(8)),
+        nominal: Number((poolAmount * (pct / 100)).toFixed(8)),
         holders,
       });
     }
 
-    // ── 3. Apply the 20% solvency cap ────────────────────────────────────
+    // ── 3. Solvency cap: never pay out more than the pool ────────────────
     const nominalSum = achieved.reduce((s, a) => s + a.nominal, 0);
     const scale = nominalSum > poolAmount && nominalSum > 0 ? poolAmount / nominalSum : 1;
 

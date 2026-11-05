@@ -53,7 +53,7 @@ const validUserId = (userId, res) => {
 /** Nominal rank percentages, the 20% pool, and the live scale factor. */
 const salaryMath = (ranks) => {
   const nominalSum = ranks.reduce((sum, r) => sum + (Number(r.rewardPercentage) || 0), 0);
-  const pool = FAST_TRACK.SALARY_POOL_PERCENTAGE;
+  const pool = 100; // rank percentages are shares of the salary pool
   const scale = nominalSum > pool && nominalSum > 0 ? pool / nominalSum : 1;
   return { nominalSum: Number(nominalSum.toFixed(4)), poolPercentage: pool, scale };
 };

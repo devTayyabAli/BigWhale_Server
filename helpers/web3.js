@@ -177,7 +177,7 @@ const getWithdrawalAmountFromContract = async (userAddress) => {
     return stale ? stale.value : 0;
   }
 }
-const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
+const stakeTokenOnChain = async (userAddress, amount, userId, stakeId, fiatAmount = 0) => {
   if (!userAddress) throw new Error("userAddress is required");
   try {
     const web3 = await getWeb3();
@@ -216,7 +216,7 @@ const stakeTokenOnChain = async (userAddress, amount, userId, stakeId) => {
           userId,
           txHash,
           type: "staking",
-          fiatAmount: 0,
+          fiatAmount: Number(fiatAmount) || 0,
           cryptoAmount: Number(amount),
           status: TRANSACTION_STATUS.PENDING,
         });

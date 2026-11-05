@@ -143,6 +143,14 @@ const handleStakeEvent = async (txHash) => {
     return null;
   }
 
+  // A re-delivered event / cron retry must never restart the 24h clock or
+  // reopen a stake that was already paid: confirm each stake only once.
+  const alreadyConfirmed = await Stake.findOne({
+    transactionId: transaction?._id,
+    activatedAt: { $ne: null },
+  }).populate("userId");
+  if (alreadyConfirmed) return alreadyConfirmed;
+
   const stake = await Stake.findOneAndUpdate(
     { transactionId: transaction?._id },
     {

@@ -136,7 +136,7 @@ const createUnlocked = async (req, response) => {
   // Default mode: server pays the user's share and auto-restakes. Set
   // WITHDRAWAL_MODE=contract to fall back to the old on-chain withdrawAmount flow.
   if (process.env.WITHDRAWAL_MODE !== "contract") {
-    return createServerPaid({ user, userId, amount }, response);
+    return createServerPaid({ user, userId, amount, fiatAmount }, response);
   }
 
   const { stakingAmount, otherRewardAmount } =
@@ -233,7 +233,7 @@ const splitWithdrawal = (gross) => {
  * can never double-spend; it is rolled back only if the stake was provably
  * never broadcast.
  */
-const createServerPaid = async ({ user, userId, amount }, response) => {
+const createServerPaid = async ({ user, userId, amount, fiatAmount }, response) => {
   const fail = (message, status = 400) => {
     response.success = false;
     response.message = message;
@@ -281,8 +281,19 @@ const createServerPaid = async ({ user, userId, amount }, response) => {
   let restakeStatus = "failed";
   try {
     stake = await createReinvestmentStakePending(userId, restake, STAKE_TYPE.FAST_TRACK_2X);
-    const stakeReceipt = await stakeTokenOnChain(user.walletAddress, restake, userId, stake._id);
-    if (stakeReceipt?.transactionHash) restakeStatus = "submitted";
+    // fiatAmount feeds the Staking page / total-staked figures (USD value of the restake).
+    const restakeFiat = Number.isFinite(Number(fiatAmount))
+      ? Number((Number(fiatAmount) * (FAST_TRACK.RESTAKE_PERCENTAGE / 100)).toFixed(6))
+      : 0;
+    const stakeReceipt = await stakeTokenOnChain(user.walletAddress, restake, userId, stake._id, restakeFiat);
+    if (stakeReceipt?.transactionHash) {
+      restakeStatus = "submitted";
+      // The tx is already mined: confirm now so the stake is ACTIVE (visible on the
+      // Staking page, 24h 2X timer started) instead of waiting for the 5-min cron.
+      await require("./stake").handleStakeEvent(stakeReceipt.transactionHash).catch((err) =>
+        console.error("createServerPaid handleStakeEvent failed (cron will retry):", err?.message)
+      );
+    }
   } catch (err) {
     console.error("createServerPaid restake error:", err?.message);
   }

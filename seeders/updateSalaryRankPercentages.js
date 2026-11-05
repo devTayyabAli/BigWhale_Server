@@ -5,14 +5,13 @@
  * ─────────────────────────────
  * Updates the 7 Salary Rank documents to the 2X Fast-Track structure:
  *
- *   Rank 1 →     5 directs →  2%      Rank 2 →    25 directs →  4%
- *   Rank 3 →   125 directs →  6%      Rank 4 →   625 directs →  8.5%
- *   Rank 5 →  3125 directs → 11.5%    Rank 6 → 15625 directs → 15%
- *   Rank 7 → 78125 directs → 20%
+ *   Rank 1 →     5 directs → 10%      Rank 2 →    25 directs → 10%
+ *   Rank 3 →   125 directs → 10%      Rank 4 →   625 directs → 12.5%
+ *   Rank 5 →  3125 directs → 15%      Rank 6 → 15625 directs → 17.5%
+ *   Rank 7 → 78125 directs → 25%   (shares of the salary pool, total 100%)
  *
- * NOTE: percentages are NOMINAL shares of each withdrawal. The salary
- * service caps the total paid at FAST_TRACK.SALARY_POOL_PERCENTAGE (20%)
- * and scales achieved ranks proportionally when their sum exceeds it.
+ * NOTE: percentages are shares of the salary pool. The salary service
+ * scales achieved ranks proportionally if their sum ever exceeds 100%.
  *
  * Legacy qualification fields (selfBusiness / directBussiness /
  * totalTeamBusiness / totalTeamSize) are also aligned to the 5 BW model so
@@ -30,7 +29,8 @@ const mongoose = require("mongoose");
 const Rank     = require("../models/rank.model");
 const { FAST_TRACK } = require("../config/constants");
 
-const PERCENTAGES = ["2", "4", "6", "8.5", "11.5", "15", "20"];
+// Share of the salary pool per rank (totals 100%).
+const PERCENTAGES = ["10", "10", "10", "12.5", "15", "17.5", "25"];
 
 const SALARY_RANK_PERCENTAGES = FAST_TRACK.RANK_DIRECT_THRESHOLDS.map((directs, idx) => ({
   starKey: idx + 1,

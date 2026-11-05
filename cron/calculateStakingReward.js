@@ -232,8 +232,13 @@ const processFastTrackStake = async (stake) => {
     return "waiting_unlock";
   }
 
-  const activatedAt = stake.activatedAt || stake.updatedAt || stake.createdAt;
-  const readyAt = new Date(new Date(activatedAt).getTime() + FAST_TRACK.PAYOUT_DELAY_HOURS * 3600 * 1000);
+  // Strictly 24h AFTER confirmation. A stake with no activatedAt (legacy data)
+  // falls back to updatedAt, which is never earlier than the confirmation;
+  // createdAt is NOT used because it predates the on-chain confirmation.
+  const activatedAt = stake.activatedAt || stake.updatedAt;
+  if (!activatedAt) return "waiting_24h";
+  const delayMs = FAST_TRACK.PAYOUT_DELAY_HOURS * 3600 * 1000;
+  const readyAt = new Date(new Date(activatedAt).getTime() + delayMs);
   if (Date.now() < readyAt.getTime()) {
     return "waiting_24h";
   }
@@ -245,7 +250,15 @@ const processFastTrackStake = async (stake) => {
 
   // Atomic claim: only the first cron run that flips fastTrackPaidAt pays.
   const claimed = await Stake.findOneAndUpdate(
-    { _id: stake._id, fastTrackPaidAt: null, status: DEFAULT_STATUS.ACTIVE },
+    {
+      _id: stake._id,
+      fastTrackPaidAt: null,
+      status: DEFAULT_STATUS.ACTIVE,
+      // Re-checked inside the atomic claim so a stale read can never pay early.
+      ...(stake.activatedAt && {
+        activatedAt: { $lte: new Date(Date.now() - delayMs) },
+      }),
+    },
     { $set: { fastTrackPaidAt: now, lastReward: now, status: DEFAULT_STATUS.INACTIVE } },
     { new: true }
   );
