@@ -32,18 +32,14 @@ const getStakeRankDetails = async (req, response) => {
   ]);
   const currentRank = Number(user?.userRankId || 0);
 
-  // A holder of rank N also earns every lower rank's share, so the banner shows
-  // the running total: 10, 20, 30, 42.5, 57.5, 75, 100 for the default shares.
-  let cumulative = 0;
   const allRank = systemRanks.map((rank) => {
-    cumulative += Number(rank.rewardPercentage) || 0;
     const required = Number(rank.directTeam || 0);
     const reached = stakedDirects >= required;
     return {
       title: RANK_NAMES[rank.starKey] || rank.title,
       imageKey: rank.title,
       starKey: rank.starKey,
-      rewardPercentage: Number(cumulative.toFixed(2)),
+      rewardPercentage: rank.rewardPercentage,
       directTeam: {
         value: stakedDirects,
         status: reached,
