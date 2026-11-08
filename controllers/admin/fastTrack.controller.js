@@ -159,19 +159,15 @@ const updateRanks = async (req, res) => {
 
 // ── Stats & audit ─────────────────────────────────────────────────────────────
 
-/** How many non-admin users have 0, 1, 2, 3 or 4 staked directs (still locked). */
+/** How many non-admin users have 0, 1, 2, 3 or 4 registered directs (still locked). */
 const unlockFunnel = async () => {
-  const confirmedIds = await Stake.distinct("userId", {
-    status: { $in: [DEFAULT_STATUS.ACTIVE, DEFAULT_STATUS.INACTIVE] },
-    transactionId: { $ne: null },
-  });
+  // 2X unlock counts registered (ACTIVE) directs, staked or not.
   const [grouped, totalUsers] = await Promise.all([
     User.aggregate([
       {
         $match: {
-          _id: { $in: confirmedIds },
           referredBy: { $ne: null },
-          status: { $ne: DEFAULT_STATUS.BANNED },
+          status: DEFAULT_STATUS.ACTIVE,
         },
       },
       { $group: { _id: "$referredBy", directs: { $sum: 1 } } },
@@ -421,8 +417,9 @@ const getUserFastTrack = async (req, res) => {
       .lean();
     if (!user) return bad(res, "User not found", 404);
 
-    const [stakedDirects, stakes, unlockTarget] = await Promise.all([
+    const [stakedDirects, activeDirects, stakes, unlockTarget] = await Promise.all([
       fastTrack.countStakedDirects(userId),
+      fastTrack.countActiveDirects(userId),
       Stake.find({ userId, stakeType: STAKE_TYPE.FAST_TRACK_2X })
         .sort({ createdAt: -1 })
         .limit(8)
@@ -434,6 +431,7 @@ const getUserFastTrack = async (req, res) => {
     return ok(res, {
       user,
       stakedDirects,
+      activeDirects,
       nextRankTarget: await fastTrack.getNextRankTarget(stakedDirects),
       computedRank: await fastTrack.getRankForDirects(stakedDirects),
       rankTitle: RANK_TITLES[user.userRankId] || null,

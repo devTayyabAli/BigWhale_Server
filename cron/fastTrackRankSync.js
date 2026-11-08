@@ -9,7 +9,7 @@
  * fix, or legacy data still converges to the correct rank / 2X unlock.
  *
  * Rules (from FAST_TRACK constants):
- *   • staked directs ≥ 5      → is2XDailyUnlocked = true
+ *   • registered directs ≥ 5 (staked or not) → is2XDailyUnlocked = true
  *   • 5 / 25 / 125 / 625 / 3125 / 15625 / 78125 staked directs → Rank 1..7
  *   • promotion only — ranks are lifetime and never go down.
  *

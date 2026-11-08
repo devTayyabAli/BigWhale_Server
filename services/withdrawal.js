@@ -32,7 +32,7 @@ const { getSettingWithKey } = require("../helpers/setting");
  * 2X Fast-Track withdrawal rules:
  *  • each withdrawal is exactly FAST_TRACK.WITHDRAWAL_CHUNK (10 BW)
  *  • unlimited withdrawals, no 24h window and no new-joining requirement
- *  • the user must have completed the 5 staked directs (2X unlocked)
+ *  • the user must have 5 registered directs, staked or not (2X unlocked)
  *
  * The amount rule is validated on `fiatAmount` (USD value the user typed)
  * when the client sends it, otherwise on `amount` (token quantity).
@@ -49,12 +49,12 @@ const validateFastTrackWithdrawal = async (user, ruleAmount) => {
   }
 
   if (!user.is2XDailyUnlocked) {
-    const [staked, needed] = await Promise.all([
-      fastTrack.countStakedDirects(user._id).catch(() => 0),
+    const [directs, needed] = await Promise.all([
+      fastTrack.countActiveDirects(user._id).catch(() => 0),
       fastTrack.getUnlockDirects(),
     ]);
-    if (staked < needed) {
-      return `Withdrawal unlocks after ${needed} staked directs (you have ${staked}).`;
+    if (directs < needed) {
+      return `Withdrawal unlocks after ${needed} directs (you have ${directs}).`;
     }
   }
 

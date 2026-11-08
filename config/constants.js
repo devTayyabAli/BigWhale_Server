@@ -145,7 +145,7 @@ const FAST_TRACK = {
   AMOUNT_TOLERANCE: 0.01,          // float tolerance for amount equality checks
   PAYOUT_MULTIPLIER: 2,            // 2X
   PAYOUT_DELAY_HOURS: 24,          // paid once, 24h after activation
-  UNLOCK_DIRECTS: 5,               // directs (with a confirmed stake) needed to unlock 2X
+  UNLOCK_DIRECTS: 5,               // registered directs (staked or not) needed to unlock 2X
   WITHDRAWAL_CHUNK: 10,            // withdrawals are exactly 10 BW
   MAX_WITHDRAWALS_PER_WINDOW: 1,   // 1 withdrawal per rolling window
   WITHDRAWAL_WINDOW_HOURS: 24,     // rolling 24h window

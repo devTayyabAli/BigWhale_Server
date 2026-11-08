@@ -30,6 +30,13 @@ const { getSettingWithKey } = require("../helpers/setting");
       { status: DEFAULT_STATUS.ACTIVE }
     );
     if (user?._id) {
+      // 2X unlock counts registered directs (staked or not): re-check the sponsor now.
+      // Required lazily to avoid a circular import; failures must not block registration.
+      try {
+        await require("./fastTrack").onDirectRegistered(user);
+      } catch (err) {
+        console.error("handleRegisterEvent: sponsor 2X sync failed:", err?.message);
+      }
       socket.io.to(`${user?._id}`).emit(CONTRACT_EVENTS.REGISTER, {});
       const otpCode = Math.floor(100000 + Math.random() * 900000);
       await sendVerifyEmailOTP(user?.email, otpCode, user?.userName);

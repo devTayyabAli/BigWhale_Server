@@ -10,7 +10,8 @@
  *    stake (active or completed). Registration alone does not count.
  *  • Sponsor gets +1 withdrawal credit (unusedDirectCount) ONLY when a direct
  *    confirms their FIRST stake — daily re-stakes never add credits.
- *  • 2X unlocks at FAST_TRACK.UNLOCK_DIRECTS staked directs.
+ *  • 2X unlocks at FAST_TRACK.UNLOCK_DIRECTS registered directs (status
+ *    ACTIVE = on-chain registration confirmed). They do NOT need to stake.
  *  • Ranks 1..7 are promotion-only (lifetime) based on staked-direct count
  *    (5, 25, 125, 625, 3125, 15625, 78125).
  *  • Withdrawal quota (1 × 10 BW per rolling 24h + 1 joining credit) is
@@ -124,6 +125,17 @@ const countJoinedDirects = async (userId) => {
   return User.countDocuments({ referredBy: userId });
 };
 
+/**
+ * Directs whose registration is confirmed on-chain (status ACTIVE), whether
+ * or not they have staked. This is what unlocks 2X. Pending sign-ups are not
+ * counted (anyone can submit the form with a random wallet) and neither are
+ * banned users.
+ */
+const countActiveDirects = async (userId) => {
+  if (!userId) return 0;
+  return User.countDocuments({ referredBy: userId, status: DEFAULT_STATUS.ACTIVE });
+};
+
 /** Rank (1..7) for a given staked-direct count, or null. */
 const getRankForDirects = async (count) => {
   const thresholds = await loadRankThresholds();
@@ -186,28 +198,29 @@ const notifyRankPromotion = async (userId, starKey) => {
 };
 
 /**
- * Re-evaluate a sponsor's 2X unlock + rank from their staked-direct count.
+ * Re-evaluate a sponsor's 2X unlock (registered directs) + rank (staked directs).
  * Promotion only — ranks are lifetime and never go down here.
  *
  * @param {ObjectId|string} referrerId
  * @param {{ creditWithdrawal?: boolean }} opts  add +1 unusedDirectCount
- * @returns {{ stakedDirects:number, unlocked:boolean, rank:number|null, promoted:boolean }}
+ * @returns {{ stakedDirects:number, activeDirects:number, unlocked:boolean, rank:number|null, promoted:boolean }}
  */
 const syncReferrerStatus = async (referrerId, { creditWithdrawal = false } = {}) => {
   const referrer = await User.findById(referrerId)
     .select("userRankId is2XDailyUnlocked unusedDirectCount")
     .lean();
-  if (!referrer) return { stakedDirects: 0, unlocked: false, rank: null, promoted: false };
+  if (!referrer) return { stakedDirects: 0, activeDirects: 0, unlocked: false, rank: null, promoted: false };
 
-  const [stakedDirects, unlockDirects] = await Promise.all([
+  const [stakedDirects, activeDirects, unlockDirects] = await Promise.all([
     countStakedDirects(referrerId),
+    countActiveDirects(referrerId),
     getUnlockDirects(),
   ]);
   const update = { $set: {}, $inc: {} };
 
   if (creditWithdrawal) update.$inc.unusedDirectCount = 1;
 
-  const unlocked = stakedDirects >= unlockDirects;
+  const unlocked = activeDirects >= unlockDirects;
   if (unlocked && !referrer.is2XDailyUnlocked) update.$set.is2XDailyUnlocked = true;
 
   const computedRank = await getRankForDirects(stakedDirects);
@@ -226,6 +239,7 @@ const syncReferrerStatus = async (referrerId, { creditWithdrawal = false } = {})
 
   return {
     stakedDirects,
+    activeDirects,
     unlocked: unlocked || Boolean(referrer.is2XDailyUnlocked),
     rank: promoted ? computedRank : currentRank,
     promoted,
@@ -241,6 +255,17 @@ const onDirectStakeConfirmed = async (stake) => {
   if (!referrerId) return null;
   const firstStake = await isFirstConfirmedStake(stake);
   return syncReferrerStatus(referrerId, { creditWithdrawal: firstStake });
+};
+
+/**
+ * Called when a direct's on-chain registration is confirmed (status → ACTIVE).
+ * Unlocks the sponsor's 2X as soon as they reach the direct target, without
+ * waiting for the directs to stake.
+ */
+const onDirectRegistered = async (user) => {
+  const referrerId = user?.referredBy;
+  if (!referrerId) return null;
+  return syncReferrerStatus(referrerId);
 };
 
 const rankFromCount = (count, thresholds) => {
@@ -272,6 +297,13 @@ const resetRanksToQualification = async () => {
   ]);
   const directsBySponsor = new Map(grouped.map((g) => [String(g._id), g.directs]));
 
+  // 2X unlock uses registered (ACTIVE) directs, staked or not.
+  const activeGrouped = await User.aggregate([
+    { $match: { referredBy: { $ne: null }, status: DEFAULT_STATUS.ACTIVE } },
+    { $group: { _id: "$referredBy", directs: { $sum: 1 } } },
+  ]);
+  const activeBySponsor = new Map(activeGrouped.map((g) => [String(g._id), g.directs]));
+
   const users = await User.find({ role: { $ne: "admin" } })
     .select("userRankId is2XDailyUnlocked")
     .lean();
@@ -281,7 +313,7 @@ const resetRanksToQualification = async () => {
   for (const user of users) {
     const directs = directsBySponsor.get(String(user._id)) || 0;
     const rank = rankFromCount(directs, thresholds);
-    const unlocked = directs >= thresholds[0];
+    const unlocked = (activeBySponsor.get(String(user._id)) || 0) >= thresholds[0];
     const currentRank = user.userRankId == null ? null : Number(user.userRankId);
     if (currentRank === rank && Boolean(user.is2XDailyUnlocked) === unlocked) continue;
     if (currentRank != null && rank == null) cleared++;
@@ -377,6 +409,8 @@ module.exports = {
   hasQualifyingStake,
   countStakedDirects,
   countJoinedDirects,
+  countActiveDirects,
+  onDirectRegistered,
   getRankForDirects,
   getNextRankTarget,
   getUnlockDirects,

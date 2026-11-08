@@ -65,6 +65,8 @@ const getReferralStats = async (request, response) => {
       userDetail,
       fastTrackDirectCount,
       joinedDirectCount,
+      unlockDirectCount,
+      unlockDirectTarget,
     ]= await Promise.all([
       teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
       teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
@@ -81,6 +83,9 @@ const getReferralStats = async (request, response) => {
       // 2X Fast-Track: directs that have actually staked (drives 2X unlock + ranks)
       fastTrack.countStakedDirects(_id).catch(() => 0),
       fastTrack.countJoinedDirects(_id).catch(() => 0),
+      // 2X unlock: registered directs, staked or not
+      fastTrack.countActiveDirects(_id).catch(() => 0),
+      fastTrack.getUnlockDirects().catch(() => 5),
     ]);
 
     const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
@@ -90,6 +95,8 @@ const getReferralStats = async (request, response) => {
       directReferral,
       activeDirectReferrals,
       joinedDirectCount,
+      unlockDirectCount,
+      unlockDirectTarget,
       fastTrackDirectCount,
       fastTrackNextRankTarget: await fastTrack.getNextRankTarget(fastTrackDirectCount),
       pendingDirectReferrals,
@@ -139,6 +146,8 @@ const getReferralStatsByUserID = async (request, response) => {
       withdrawalInfo,
       userDetail,
       fastTrackDirectCount,
+      unlockDirectCount,
+      unlockDirectTarget,
     ] = await Promise.all([
       teamId ? referral.numOfReferrals(teamId, 1) : Promise.resolve(0),
       teamId ? referral.numOfActivePendigReferrals(teamId, 1, DEFAULT_STATUS.ACTIVE) : Promise.resolve(0),
@@ -151,6 +160,8 @@ const getReferralStatsByUserID = async (request, response) => {
       calculateTotalWithdrawalAmount(_id),
       User.findById(_id).select("userRankId").lean(),
       fastTrack.countStakedDirects(_id).catch(() => 0),
+      fastTrack.countActiveDirects(_id).catch(() => 0),
+      fastTrack.getUnlockDirects().catch(() => 5),
     ]);
 
     const { stakingRewardBonus, referralLevelBonus, leadershipBonus, instantRewardBonus, withdrawalAmount, totalBonus, availableBonusBalance, salaryRankBonus } = withdrawalInfo;
@@ -159,6 +170,8 @@ const getReferralStatsByUserID = async (request, response) => {
     return response.status(HTTP_STATUS_CODE.OK).json({
       directReferral,
       activeDirectReferrals,
+      unlockDirectCount,
+      unlockDirectTarget,
       pendingDirectReferrals,
       directReferralBussiness,
       downlineReferral,
